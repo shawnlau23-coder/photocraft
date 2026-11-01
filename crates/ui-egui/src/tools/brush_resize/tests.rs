@@ -317,7 +317,7 @@ fn drag_in_view(rotation: f32, flip: bool, dx: f64, dy: f64) -> (f32, f32) {
     let mut app = app(Tool::Brush);
     app.sync_views();
     app.ui.views[0].rotation = rotation;
-    app.ui.view.flip_horizontal = flip;
+    app.ui.views[0].flip_horizontal = flip;
     tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, CTRL_ALT);
     tool_event(&mut app, ToolEvent::Up { x: 100.0 + dx, y: 100.0 + dy }, CTRL_ALT);
     let b = &app.session.tools.brush;

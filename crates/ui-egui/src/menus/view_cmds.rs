@@ -97,8 +97,6 @@ pub struct ViewOptions {
     pub extras: bool,
     pub show: Show,
     pub snap_to: SnapTo,
-    /// View › Flip Horizontal: mirror the view only (the document is untouched).
-    pub flip_horizontal: bool,
     /// View › Pixel Aspect Ratio preset id ("square", "d1DvNtsc", …) and its correction toggle.
     pub pixel_aspect: String,
     pub pixel_aspect_correction: bool,
@@ -131,7 +129,6 @@ impl Default for ViewOptions {
             extras: true,
             show: Show::default(),
             snap_to: SnapTo::default(),
-            flip_horizontal: false,
             pixel_aspect: "square".into(),
             // Photoshop shows non-square pixels corrected until the user turns it off.
             pixel_aspect_correction: true,

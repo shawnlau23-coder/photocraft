@@ -362,7 +362,7 @@ fn zoom_drags_keep_the_press_point_in_rotated_and_flipped_views() {
         view.rotation = rotation;
         view.fit_pending = false;
         view.fill_pending = false;
-        h.state_mut().ui.view.flip_horizontal = flip;
+        h.state_mut().ui.views[0].flip_horizontal = flip;
         h.run_steps(2);
         let anchor = view_xf(&h).to_screen(140.0, 110.0);
         let modifiers = egui::Modifiers { alt: out, ..Default::default() };
@@ -389,7 +389,7 @@ fn zoom_drags_keep_the_press_point_in_rotated_and_flipped_views() {
         let expected = if scrubby { scrub_zoom(1.0, -40.0, [400, 300]) } else { crate::zoom_levels::step(1.0, if out { -1 } else { 1 }, [400, 300]) };
         assert!((h.state().current_zoom() - expected).abs() < 1e-5);
         assert_eq!(h.state().ui.views[0].rotation, rotation);
-        assert_eq!(h.state().ui.view.flip_horizontal, flip);
+        assert_eq!(h.state().canvas_flip_horizontal(), flip);
         assert_eq!(h.state().session.documents()[0].history.past_len(), 0);
     }
 }

@@ -98,7 +98,7 @@ fn render(profile: &str, rgb: [f32; 3], reopen: bool) -> Option<([u8; 3], [u8; 3
         photocraft_ui_egui::adjust_preview::display_doc(harness.state_mut(), 0).expect("rebuilt adjustment preview");
         harness.state_mut().ui.dialogs.clear();
     }
-    harness.state_mut().ui.view.flip_horizontal = true;
+    harness.state_mut().ui.views[0].flip_horizontal = true;
     let cpu = sample(&mut harness);
     eprintln!("gpu {gpu:?} cpu {cpu:?}");
     Some((gpu, cpu))

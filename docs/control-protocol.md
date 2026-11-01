@@ -777,3 +777,7 @@ retain custom collapse settings and Timeline visibility.
 ### Select the layer under the pointer
 
 Assign **Select Layer Under Cursor** in Keyboard Shortcuts to choose the topmost visible, pickable layer beneath the canvas pointer. Empty pixels and points outside the document leave the selection unchanged; dialogs, strokes and brush-resize gestures block it. The command follows zoom, pan, view rotation and horizontal flipping. Agents can invoke `ui.menu.invoke {"id":"layer.selectUnderCursor"}` after moving the screen pointer with `ui.move {"x": ..., "y": ...}`. The command has no default shortcut.
+
+### Document-window focus
+
+`ui.focus {"window": id}` focuses an open extra document window and targets subsequent View > Flip Horizontal commands there. `ui.focus {}` (or `{"window": null}`) selects the main canvas. `ui.inspect.focusedWindow` reports the selected extra-window id, or null for the main canvas. Camera reflection is serialized as `views[].flip_horizontal` / `windows[].view.flip_horizontal`, independently of the shared document. A new window copies its source camera initially and then owns its presentation state.

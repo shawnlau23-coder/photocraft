@@ -314,7 +314,7 @@ fn screen(h: &Harness<'static, PhotocraftApp>, x: f64, y: f64) -> Pos2 {
         rect: crate::rulers::content_rect(app, app.last_canvas_rect),
         zoom: v.zoom,
         center: v.center,
-        flip: app.ui.view.flip_horizontal,
+        flip: app.canvas_flip_horizontal(),
         rotation: v.rotation,
         aspect: app.ui.view.display_aspect(),
     };

@@ -164,7 +164,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     }
     Some(match id {
         "view.extras" => o.extras,
-        "view.flipHorizontal" => o.flip_horizontal,
+        "view.flipHorizontal" => app.focused_view().is_some_and(|v| v.flip_horizontal),
         "view.pixelAspectRatioCorrection" => o.pixel_aspect_correction,
         "view.patternPreview" => o.pattern_preview,
         "view.pixelArtPreview" => o.pixel_art_preview,
@@ -382,8 +382,12 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
             Ok(json!(o.extras))
         }
         "view.flipHorizontal" => {
-            o.flip_horizontal = flag_param(p, o.flip_horizontal);
-            Ok(json!(o.flip_horizontal))
+            let view = app.focused_view_mut().ok_or("no document")?;
+            view.flip_horizontal = flag_param(p, view.flip_horizontal);
+            let flipped = view.flip_horizontal;
+            ctx.request_repaint_of(app.focused_viewport());
+            ctx.request_repaint();
+            Ok(json!(flipped))
         }
         "view.pixelAspectRatioCorrection" => {
             o.pixel_aspect_correction = flag_param(p, o.pixel_aspect_correction);

@@ -64,7 +64,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     app.sync_views();
     let Some(doc_size) = app.session.active().map(|st| [st.doc.size.width as f32, st.doc.size.height as f32]) else { return false };
-    let (ppp, aspect, flip, overscroll) = (app.ppp, app.ui.view.display_aspect(), app.ui.view.flip_horizontal, app.session.prefs().tools.overscroll);
+    let (ppp, aspect, flip, overscroll) = (app.ppp, app.ui.view.display_aspect(), app.canvas_flip_horizontal(), app.session.prefs().tools.overscroll);
     let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
     let Some(view) = app.ui.views.get_mut(i) else { return false };
     let zoom = view.zoom / ppp;
@@ -170,7 +170,7 @@ mod tests {
         let rect = crate::rulers::content_rect(&app, app.last_canvas_rect);
         for (rotation, flip) in [(90.0, false), (0.0, true), (-90.0, true)] {
             app.ui.views[0].rotation = rotation;
-            app.ui.view.flip_horizontal = flip;
+            app.ui.views[0].flip_horizontal = flip;
             for (key, corner, inward) in [(Key::Home, [0.0, 0.0], 1.0), (Key::End, [2000.0, 2000.0], -1.0)] {
                 let center = press(&mut app, key, Modifiers::NONE);
                 let xf = crate::canvas::ViewXform { rect, zoom: 4.0, center, flip, rotation, aspect: 1.0 };

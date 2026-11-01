@@ -75,7 +75,7 @@ fn pattern_preview_repeats_the_document_on_gpu_and_cpu_canvases() {
     let diagonal = [-60.0, -40.0];
     for flip in [false, true] {
         let path = if flip { "CPU" } else { "GPU" };
-        h.state_mut().ui.view.flip_horizontal = flip;
+        h.state_mut().ui.views[0].flip_horizontal = flip;
         h.state_mut().ui.view.pattern_preview = false;
         let off = sample(&mut h, right);
         assert!(!near(off, red) && !near(off, blue), "{path}: pasteboard without Pattern Preview, got {off:?}");

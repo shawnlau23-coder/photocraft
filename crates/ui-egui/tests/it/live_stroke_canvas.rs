@@ -76,7 +76,7 @@ fn frames(h: &mut Harness, c: Case) -> (Pixels, Pixels, Pixels, bool) {
         let brush = json!({"size": 30, "hardness": c.hardness, "pressureSize": c.pressure, "smoothing": {"amount": c.smoothing}});
         app.run("tools.setBrush", json!({ "brush": brush })).expect("brush");
         app.sync_views();
-        app.ui.view.flip_horizontal = c.flip;
+        app.ui.views[0].flip_horizontal = c.flip;
     }
     control(h, "ui.set", json!({"tool": "brush", "zoom": c.zoom, "center": [150, 100]}));
     // The smoothing tool option syncs on the first frame with the Brush: set it after.

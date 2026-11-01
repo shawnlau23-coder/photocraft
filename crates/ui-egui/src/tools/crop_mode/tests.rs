@@ -72,7 +72,7 @@ fn a_live_resize_snaps_the_handle_without_feedback_from_the_camera() {
                 let mut app = app();
                 app.ppp = ppp;
                 app.ui.views[0].zoom = zoom;
-                app.ui.view.flip_horizontal = flip;
+                app.ui.views[0].flip_horizontal = flip;
                 if ratio {
                     app.ui.tool_options.crop_ratio = "original".into();
                 }
@@ -173,7 +173,7 @@ fn moving_the_image_snaps_the_frame_to_the_document_centre() {
         let mut app = app();
         app.ui.extras.snap = snap;
         app.ui.views[0].zoom = zoom;
-        app.ui.view.flip_horizontal = flip;
+        app.ui.views[0].flip_horizontal = flip;
         with_frame(&mut app);
         // The frame [40, 30, 100, 70] goes 27 px right over the image: its centre lands 3 px
         // short of the document's (100, 50), inside the snap radius at either zoom.

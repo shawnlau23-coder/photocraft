@@ -98,6 +98,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "views": app.ui.views,
         "dialogs": dialogs,
         "windows": app.ui.windows,
+        "focusedWindow": app.ui.focused_window,
         "theme": app.ui.theme,
         "status": app.ui.status,
         "statusError": app.ui.status_error,

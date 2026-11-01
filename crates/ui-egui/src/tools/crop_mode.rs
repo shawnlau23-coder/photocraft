@@ -79,7 +79,7 @@ pub fn sync(app: &mut PhotocraftApp, pivot: Option<[f64; 2]>) {
     let Some(i) = app.session.active_index() else { return };
     // Classic Mode: an upright camera, the frame turned on it. Default mode: the frame upright.
     let want = if classic(app) { 0.0 } else { crate::rotate_view::wrap_deg(-crate::crop_ui::angle(app) as f32) };
-    let flip = app.ui.view.flip_horizontal;
+    let flip = app.canvas_flip_horizontal();
     let Some(v) = app.ui.views.get_mut(i) else { return };
     if v.rotation != want {
         if let Some(p) = pivot.filter(|p| p.iter().all(|v| v.is_finite())) {
@@ -217,7 +217,7 @@ fn remap(p: [f64; 2], from: PressView, to: PressView, flip: bool) -> [f64; 2] {
 /// would nudge a click).
 pub fn to_press(app: &PhotocraftApp, press: Option<PressView>, p: [f64; 2]) -> [f64; 2] {
     match (press, press_view(app)) {
-        (Some(press), Some(now)) if press != now => remap(p, now, press, app.ui.view.flip_horizontal),
+        (Some(press), Some(now)) if press != now => remap(p, now, press, app.canvas_flip_horizontal()),
         _ => p,
     }
 }
@@ -225,7 +225,7 @@ pub fn to_press(app: &PhotocraftApp, press: Option<PressView>, p: [f64; 2]) -> [
 /// A press-view point mapped back into the current camera after snapping the crop handle.
 pub(crate) fn from_press(app: &PhotocraftApp, press: PressView, p: [f64; 2]) -> [f64; 2] {
     match press_view(app) {
-        Some(now) => remap(p, press, now, app.ui.view.flip_horizontal),
+        Some(now) => remap(p, press, now, app.canvas_flip_horizontal()),
         None => p,
     }
 }
@@ -241,7 +241,7 @@ pub fn control_point(app: &PhotocraftApp, p: [f64; 2]) -> [f64; 2] {
         _ => None,
     };
     match (press, press_view(app)) {
-        (Some(press), Some(now)) if app.ui.tool == Tool::Crop && press != now => remap(p, press, now, app.ui.view.flip_horizontal),
+        (Some(press), Some(now)) if app.ui.tool == Tool::Crop && press != now => remap(p, press, now, app.canvas_flip_horizontal()),
         _ => p,
     }
 }
@@ -265,7 +265,7 @@ pub fn offset_image(app: &mut PhotocraftApp, rect: [f64; 4], press: Option<Press
 /// A screen vector `s` (points, at the current zoom ignored) as a document vector of the same
 /// length: undoes the view's flip and rotation.
 pub fn screen_to_doc_vec(app: &PhotocraftApp, s: [f64; 2]) -> [f64; 2] {
-    let xf = ViewXform { rect: Rect::ZERO, zoom: 1.0, center: [0.0, 0.0], flip: app.ui.view.flip_horizontal, rotation: view_rotation(app), aspect: 1.0 };
+    let xf = ViewXform { rect: Rect::ZERO, zoom: 1.0, center: [0.0, 0.0], flip: app.canvas_flip_horizontal(), rotation: view_rotation(app), aspect: 1.0 };
     let u = xf.unmap_vec(vec2(s[0] as f32, s[1] as f32));
     [f64::from(u.x), f64::from(u.y)]
 }

@@ -1693,7 +1693,7 @@ fn resize_cursors_turn_with_the_box_and_the_view() {
         crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
         let view_index = app.session.active_index().unwrap();
         app.ui.views[view_index].rotation = view;
-        app.ui.view.flip_horizontal = flip;
+        app.ui.views[0].flip_horizontal = flip;
         let t = app.ui.transform.as_mut().unwrap();
         let (s, c) = f64::to_radians(deg).sin_cos();
         let o = [128.0, 128.0];

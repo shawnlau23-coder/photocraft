@@ -163,13 +163,7 @@ fn shell_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequ
             ok(Value::Null)
         }
         "ui.gpu.simulateLoss" => simulate_gpu_loss(app, ctx, p),
-        "ui.focus" => {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            ctx.request_repaint();
-            ok(Value::Null)
-        }
+        "ui.focus" => focus_document_window(app, ctx, p),
         "ui.screenshot" => screenshot(app, ctx, p),
         _ => return None,
     })
@@ -1429,4 +1423,34 @@ fn open_pcraft_directory(app: &mut PhotocraftApp, path: &str) -> Option<Outcome>
         Ok(None) => None, // a regular file: the bytes path reads the zip form
         Err(e) => Some(err(e)),
     }
+}
+
+/// Focus a document viewport, retaining its identity for subsequent shell view commands.
+fn focus_document_window(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
+    let p = match input_object(p, None, &["window"]) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
+    let id = match p.get("window") {
+        None | Some(Value::Null) => None,
+        Some(v) => match v.as_u64() {
+            Some(id) => Some(id),
+            None => return err("window must be a window id or null"),
+        },
+    };
+    if let Some(id) = id {
+        let Some(document) = app.ui.windows.iter().find(|w| w.id == id && w.open).map(|w| w.document) else {
+            return err("no such document window");
+        };
+        if !app.session.set_active(document) {
+            return err("document window has no document");
+        }
+    }
+    app.ui.focused_window = id;
+    let viewport = id.map_or(egui::ViewportId::ROOT, |id| egui::ViewportId::from_hash_of(("docwin", id)));
+    ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Visible(true));
+    ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Minimized(false));
+    ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+    ctx.request_repaint_of(viewport);
+    ok(Value::Null)
 }

@@ -660,9 +660,7 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
     match id {
         "window.newWindowForDocument" => Some((|| {
             let doc = app.session.active_index().ok_or("no document")?;
-            let wid = app.ui.alloc_id();
-            let view = app.ui.views[doc].clone();
-            app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, floating: false, focused: false, position: None });
+            let wid = crate::view_cmds::float_window(app, doc, 0, false);
             Ok(json!({"window": wid}))
         })()),
         "window.theme.toggle" => {

@@ -619,10 +619,10 @@ fn a_flipped_view_records_why_it_draws_on_the_cpu() {
     g.harness.state_mut().run("file.new", json!({"width": 400, "height": 300, "background": "#336699"})).expect("new");
     g.harness.run_steps(3);
     assert!(on_gpu_canvas(&g));
-    g.harness.state_mut().ui.view.flip_horizontal = true;
+    g.harness.state_mut().ui.views[0].flip_horizontal = true;
     g.harness.run_steps(3);
     assert_eq!(render_path_of(&g), (Some("viewTransform"), Some("CPU Rendering")));
-    g.harness.state_mut().ui.view.flip_horizontal = false;
+    g.harness.state_mut().ui.views[0].flip_horizontal = false;
     g.harness.run_steps(3);
     assert!(on_gpu_canvas(&g), "back on the GPU");
 }

@@ -448,6 +448,7 @@ fn space_on_the_canvas_moves_the_frame_not_the_view() {
         zoom_anchor: None,
         display_camera: None,
         zoom_transition: None,
+        flip_horizontal: false,
     };
     a.ui.views = vec![view.clone()];
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
@@ -937,6 +938,7 @@ fn double_click_inside_the_frame_commits() {
 #[test]
 fn cursor_follows_the_frame() {
     let mut app = app(SampleType::U8);
+    app.sync_views();
     assert_eq!(cursor(&app, [5.0, 5.0]), None, "no frame yet: the default crosshair");
     app.ui.crop_rect = Some([20.0, 20.0, 100.0, 60.0]);
     assert_eq!(cursor(&app, [20.0, 20.0]), Some(CursorIcon::ResizeNwSe));
@@ -945,11 +947,11 @@ fn cursor_follows_the_frame() {
     assert_eq!(cursor(&app, [60.0, 40.0]), Some(CursorIcon::Move));
     assert_eq!(cursor(&app, [150.0, 40.0]), Some(CursorIcon::None), "outside: the drawn turn cursor");
     // View › Flip Horizontal shows the top-left corner at the top right: its arrow mirrors too.
-    app.ui.view.flip_horizontal = true;
+    app.ui.views[0].flip_horizontal = true;
     assert_eq!(cursor(&app, [20.0, 20.0]), Some(CursorIcon::ResizeNeSw), "flipped view");
     assert_eq!(cursor(&app, [100.0, 20.0]), Some(CursorIcon::ResizeNwSe), "flipped view");
     assert_eq!(cursor(&app, [60.0, 60.0]), Some(CursorIcon::ResizeVertical), "flipped view");
-    app.ui.view.flip_horizontal = false;
+    app.ui.views[0].flip_horizontal = false;
     app.ui.tool = Tool::Brush;
     assert_eq!(cursor(&app, [60.0, 40.0]), None);
 }

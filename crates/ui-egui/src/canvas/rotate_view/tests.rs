@@ -151,7 +151,7 @@ fn view_xform_roundtrip_and_ninety_degrees() {
 /// Screen angle, about the canvas centre, of the document point that was under `p0` at the press.
 fn followed_angle(h: &Harness<'static, PhotocraftApp>, p0: Pos2, start_rotation: f32) -> f32 {
     let st = h.state();
-    let (rect, v, flip) = (st.last_canvas_rect, &st.ui.views[0], st.ui.view.flip_horizontal);
+    let (rect, v, flip) = (st.last_canvas_rect, &st.ui.views[0], st.canvas_flip_horizontal());
     let before = ViewXform { rect, zoom: 1.0, center: v.center, flip, rotation: start_rotation, aspect: 1.0 };
     let d = before.to_doc(p0);
     let after = ViewXform { rotation: v.rotation, ..before };
@@ -163,7 +163,7 @@ fn followed_angle(h: &Harness<'static, PhotocraftApp>, p0: Pos2, start_rotation:
 fn drag_follows_the_pointer_in_a_flipped_view() {
     for flip in [false, true] {
         let mut h = harness();
-        h.state_mut().ui.view.flip_horizontal = flip;
+        h.state_mut().ui.views[0].flip_horizontal = flip;
         h.run_steps(2);
         let c = h.state().last_canvas_rect.center();
         let p0 = c + vec2(120.0, 0.0);

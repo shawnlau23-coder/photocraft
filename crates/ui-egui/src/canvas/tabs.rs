@@ -78,6 +78,9 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     let main_focused = ui.ctx().input(|i| i.viewport().focused.unwrap_or(true));
     let rect = ui.available_rect_before_wrap();
+    if main_focused && ui.rect_contains_pointer(rect) && ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
+        app.ui.focused_window = None;
+    }
     app.last_canvas_rect = rect;
     app.drop_canvas_rect = Some(rect);
     // Window › Arrange: tiled / n-up layouts show several documents side by side; the active one
@@ -742,14 +745,24 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 close = true;
             }
             focused = ui.ctx().input(|i| i.viewport().focused == Some(true));
-            if focused && !w.focused && app.session.active_index() != Some(w.document) {
+            if focused && !w.focused && class != egui::ViewportClass::EmbeddedWindow {
+                app.ui.focused_window = Some(w.id);
                 app.session.set_active(w.document);
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
-                view = canvas_view(app, ui, w.document, rect, view.clone(), focused);
-                // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
-                crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
+                app.with_document_window(w.id, |app| {
+                    app.last_canvas_rect = rect;
+                    app.ppp = ui.ctx().pixels_per_point();
+                    if focused && class == egui::ViewportClass::Immediate {
+                        crate::shortcuts::document_window_zoom_keys(app, ui.ctx());
+                    }
+                    let camera = app.ui.views[w.document].clone();
+                    view = canvas_view(app, ui, w.document, rect, camera, focused);
+                    // Zoom Resizes Windows keeps this window's camera local too.
+                    crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
+                    app.ui.views[w.document] = view.clone();
+                });
             });
         });
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {

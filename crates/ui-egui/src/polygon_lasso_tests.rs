@@ -48,7 +48,7 @@ fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
         rect: crate::rulers::content_rect(app, app.last_canvas_rect),
         zoom: v.zoom,
         center: v.center,
-        flip: app.ui.view.flip_horizontal,
+        flip: app.canvas_flip_horizontal(),
         rotation: v.rotation,
         aspect: app.ui.view.display_aspect(),
     };
@@ -234,7 +234,7 @@ fn polygon_edge_scroll_continues_with_button_up_and_keeps_vertices_fixed() {
         (1.0, 0.0, false, 90.0),
     ] {
         let mut h = zoomed_polygon();
-        h.state_mut().ui.view.flip_horizontal = flip;
+        h.state_mut().ui.views[0].flip_horizontal = flip;
         h.state_mut().ui.views[0].rotation = rotation;
         h.run_steps(1);
         let xf = ViewXform::active(h.state()).unwrap();
@@ -314,7 +314,7 @@ fn polygon_edge_scroll_keeps_pixel_aspect_and_shift_constrained_segments() {
     for (flip, rotation) in [(false, 0.0), (true, 0.0), (false, 45.0), (true, 90.0)] {
         let mut h = zoomed_polygon();
         h.state_mut().ui.view.pixel_aspect = "custom:2:Wide".into();
-        h.state_mut().ui.view.flip_horizontal = flip;
+        h.state_mut().ui.views[0].flip_horizontal = flip;
         h.state_mut().ui.views[0].rotation = rotation;
         h.run_steps(2);
         let original = ViewXform::active(h.state()).unwrap();

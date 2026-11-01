@@ -1005,7 +1005,7 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<CursorIcon> {
     Some(match h {
         // The arrow as the handle faces on screen: the frame's turn plus the view's, mirrored when
         // the view is flipped.
-        Hit::Handle(hx, hy) => resize_icon(hx, hy, deg + f64::from(crate::crop_mode::view_rotation(app)), app.ui.view.flip_horizontal),
+        Hit::Handle(hx, hy) => resize_icon(hx, hy, deg + f64::from(crate::crop_mode::view_rotation(app)), app.canvas_flip_horizontal()),
         // Inside the untouched default frame a drag draws a new one (`pointer`), so nothing moves (#4461).
         Hit::Inside if app.crop.default_frame => CursorIcon::Crosshair,
         Hit::Inside => CursorIcon::Move,

@@ -38,7 +38,7 @@ fn screen_position(v: &Value) -> Option<[f32; 2]> {
 
 pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize, floating: bool) -> u64 {
     let wid = app.ui.alloc_id();
-    let mut view = app.ui.views.get(doc).cloned().unwrap_or_default();
+    let mut view = if app.session.active_index() == Some(doc) { app.focused_view() } else { app.ui.views.get(doc) }.cloned().unwrap_or_default();
     view.zoom_animating = false;
     view.zoom_anchor = None;
     view.zoom_transition = None;

@@ -87,7 +87,7 @@ fn navigator_draws_the_gpu_canvas_texture_and_follows_edits() {
     h.run_steps(4);
 
     // A flipped view draws on the CPU: the Navigator goes back to its CPU thumbnail.
-    h.state_mut().ui.view.flip_horizontal = true;
+    h.state_mut().ui.views[0].flip_horizontal = true;
     h.run_steps(6);
     assert!(!h.state().navigator_gpu.contains_key(&id), "no GPU view while the canvas draws on the CPU");
     assert!(h.state().navigator_textures.contains_key(&id), "the CPU thumbnail again");

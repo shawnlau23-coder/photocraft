@@ -788,7 +788,7 @@ fn a_guide_dragged_onto_a_ruler_is_deleted_through_the_canvas() {
                 rect: content_rect(app, app.last_canvas_rect),
                 zoom: v.zoom,
                 center: v.center,
-                flip: app.ui.view.flip_horizontal,
+                flip: app.canvas_flip_horizontal(),
                 rotation: v.rotation,
                 aspect: app.ui.view.display_aspect(),
             };

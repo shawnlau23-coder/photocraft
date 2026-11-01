@@ -67,7 +67,7 @@ fn screen(h: &Harness, x: f32, y: f32) -> Pos2 {
         rect: photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect),
         zoom: v.zoom,
         center: v.center,
-        flip: app.ui.view.flip_horizontal,
+        flip: app.canvas_flip_horizontal(),
         rotation: v.rotation,
         aspect: app.ui.view.display_aspect(),
     };

@@ -342,7 +342,7 @@ fn curves_picker_samples_document_coordinates_through_the_view_transform() {
     let history = h.state().session.active().unwrap().history.past_len();
     let view = &mut h.state_mut().ui.views[0];
     (view.zoom, view.center, view.fit_pending) = (4.0, [200.0, 150.0], false);
-    h.state_mut().ui.view.flip_horizontal = true;
+    h.state_mut().ui.views[0].flip_horizontal = true;
     let dialog = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.curves").unwrap();
     h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("__curvePicker".into(), json!("black"));
     h.run_steps(3);
@@ -1337,7 +1337,7 @@ fn assignable_pick_layer_shortcut_follows_transformed_canvas_without_editing() {
         h.state_mut().ui.views[0].zoom = zoom;
         h.state_mut().ui.views[0].rotation = rotation;
         h.state_mut().ui.views[0].center = [180.0, 145.0];
-        h.state_mut().ui.view.flip_horizontal = flip;
+        h.state_mut().ui.views[0].flip_horizontal = flip;
         h.run_steps(2);
         for (point, expected) in [([120.0, 120.0], paint), ([155.0, 155.0], base)] {
             let pos = crate::canvas::ViewXform::active(h.state()).unwrap().to_screen(point[0], point[1]);

@@ -422,7 +422,7 @@ fn xf(app: &PhotocraftApp) -> ViewXform {
         rect: crate::rulers::content_rect(app, app.last_canvas_rect),
         zoom: v.zoom / app.canvas_ppp(),
         center: v.center,
-        flip: app.ui.view.flip_horizontal,
+        flip: app.canvas_flip_horizontal(),
         rotation: v.rotation,
         aspect: app.ui.view.display_aspect(),
     }
@@ -507,7 +507,7 @@ fn clicks_and_drags_land_on_the_glyph_under_the_pointer() {
                     if let Some(a) = tf {
                         app.run("type.edit", json!({"layer": id.0, "transform": a.m})).unwrap();
                     }
-                    app.ui.view.flip_horizontal = flip;
+                    app.ui.views[0].flip_horizontal = flip;
                     let mut h = harness(ppp, app);
                     // Centre the view on the text's middle, then pan.
                     let (l, aff, _) = layout(h.state_mut(), id).unwrap();
@@ -1321,7 +1321,7 @@ fn temporary_type_transform_scales_without_reflow_or_leaving_type() {
                 let mut h = harness(ppp, app);
                 let f = crate::type_transform::frame(h.state_mut()).unwrap();
                 let center = f.pivot;
-                h.state_mut().ui.view.flip_horizontal = flip;
+                h.state_mut().ui.views[0].flip_horizontal = flip;
                 let view = &mut h.state_mut().ui.views[0];
                 // At high zoom, show the dragged corner; a release beyond the canvas is valid.
                 view.center = if zoom >= 2.0 { [f.quad[2][0] as f32, f.quad[2][1] as f32] } else { [center[0] as f32 + 17.0, center[1] as f32 - 9.0] };

@@ -146,7 +146,7 @@ pub fn follow(
         aspect: app.ui.view.display_aspect(),
         chrome: rect.size() - crate::rulers::content_rect(app, rect).size(),
         bars: if app.ui.view.shows_scrollbars() { crate::scrollbars::THICKNESS } else { 0.0 },
-        flip: app.ui.view.flip_horizontal,
+        flip: after.flip_horizontal,
         monitor: ctx.input(|i| i.viewport().monitor_size),
     };
     let on = app.session.prefs().general.zoom_resizes_windows && !pinned;

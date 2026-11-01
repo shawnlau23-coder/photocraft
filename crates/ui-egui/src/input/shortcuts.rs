@@ -169,6 +169,46 @@ pub fn consume(ctx: &egui::Context, sc: &KeyboardShortcut) -> bool {
 /// at any zoom): Zoom In / Out, Fit on Screen, 100%.
 pub const NAV_COMMANDS: [&str; 4] = ["view.zoomIn", "view.zoomOut", "view.fitOnScreen", "view.actualPixels"];
 
+/// Immediate document viewports do not run the main frame's shortcut handler. Dispatch only
+/// zoom steps here, inside the caller's isolated camera context; other shortcuts stay untouched.
+pub(crate) fn document_window_zoom_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !ctx.input(|i| i.focused)
+        || !ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })))
+        || egui::Popup::is_any_open(ctx)
+        || crate::menu_keys::is_focused(ctx)
+        || app.camera_raw.is_some()
+        || crate::distort_ui::modal_workspace(app).is_some()
+    {
+        return;
+    }
+    if !ctx.text_edit_focused() {
+        crate::layout_keys::apply(ctx);
+    }
+    let focus = crate::shortcut_dispatch::Focus::of(ctx);
+    let bindings = crate::shortcut_dispatch::bindings(app);
+    let commands: Vec<String> = ctx.input_mut(|input| {
+        let mut commands = Vec::new();
+        input.events.retain(|event| {
+            let egui::Event::Key { key, modifiers, pressed: true, .. } = event else { return true };
+            let matched = bindings.iter().find(|(_, sc)| focus.allows(sc) && key_matches(sc, *key, *modifiers));
+            if let Some((id, _)) = matched
+                && matches!(id.as_str(), "view.zoomIn" | "view.zoomOut")
+            {
+                commands.push(id.clone());
+                return false;
+            }
+            true
+        });
+        commands
+    });
+    for id in commands {
+        if let Err(error) = crate::menus::invoke(app, ctx, &id, json!({})) {
+            app.ui.status = error;
+            app.ui.status_error = true;
+        }
+    }
+}
+
 /// ⌘+ / ⌘- / ⌘0 / ⌘1 (or their Edit › Keyboard Shortcuts overrides). Returns true when one ran.
 /// Layer › New › Layer's shortcut with ⌥ added (⌥⇧⌘N by default) makes the layer at once, as in
 /// Photoshop: the plain shortcut asks with the New Layer dialog first, like the menu item, and

@@ -112,9 +112,12 @@ pub enum DialogKind {
     LayerStyle,
 }
 
-/// Per-document view (camera) state.
+/// Per-canvas view state: main document views and extra windows own separate cameras.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct View {
+    /// Display-only reflection, owned by this camera rather than the shared document.
+    #[serde(default)]
+    pub flip_horizontal: bool,
     /// Screen (device) pixels per document pixel: the user-facing zoom (`100%` is `1.0`).
     /// Canvas geometry works in egui points and divides by `ctx.pixels_per_point`
     /// (`PhotocraftApp::point_zoom`), so neither the display scale nor Interface › UI Scale
@@ -169,6 +172,7 @@ impl View {
 impl Default for View {
     fn default() -> Self {
         Self {
+            flip_horizontal: false,
             zoom: 1.0,
             center: [0.0, 0.0],
             fit_pending: true,
@@ -398,7 +402,7 @@ pub struct UiState {
     /// View extras: rulers (⌘R), grid (⌘'), guides (⌘;), snapping (⇧⌘;), locked guides (⌥⌘;).
     #[serde(default)]
     pub extras: Extras,
-    /// View / Window / Type preferences: screen mode, Extras, Show and Snap To, flip, arrangement.
+    /// View / Window / Type preferences: screen mode, Extras, Show and Snap To, arrangement.
     #[serde(default)]
     pub view: crate::view_cmds::ViewOptions,
     pub panels: Panels,
@@ -406,6 +410,10 @@ pub struct UiState {
     pub views: Vec<View>,
     pub dialogs: Vec<Dialog>,
     pub windows: Vec<DocWindow>,
+    /// Last focused document window; menu focus must not change the view command target.
+    /// None selects the main document canvas. Never restore OS focus from saved UI state.
+    #[serde(skip)]
+    pub focused_window: Option<u64>,
     pub theme: crate::theme::ThemeKind,
     pub workspace: String,
     pub palette_open: bool,
@@ -586,6 +594,7 @@ impl Default for UiState {
             views: Vec::new(),
             dialogs: Vec::new(),
             windows: Vec::new(),
+            focused_window: None,
             theme: crate::theme::ThemeKind::ProMedium,
             workspace: "Essentials".into(),
             palette_open: false,

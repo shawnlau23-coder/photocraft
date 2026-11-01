@@ -129,7 +129,7 @@ fn omitting_an_occluded_checker_preserves_cpu_canvas_pixels() {
         [(0.0, false, false), (23.0, false, false), (0.0, true, false), (0.0, false, true), (23.0, false, true), (0.0, true, true), (23.0, true, true)]
     {
         h.state_mut().ui.views[0].rotation = rotation;
-        h.state_mut().ui.view.flip_horizontal = flip;
+        h.state_mut().ui.views[0].flip_horizontal = flip;
         h.state_mut().ui.view.pattern_preview = pattern;
         reference_frame(&mut h);
         let reference = h.render().unwrap();
@@ -177,7 +177,7 @@ fn pattern_preview_keeps_the_legacy_checker_for_every_copy() {
     };
     for (rotation, flip) in [(0.0, false), (23.0, false), (0.0, true), (23.0, true)] {
         h.state_mut().ui.view.pattern_preview = true;
-        h.state_mut().ui.view.flip_horizontal = flip;
+        h.state_mut().ui.views[0].flip_horizontal = flip;
         let v = &mut h.state_mut().ui.views[0];
         v.zoom = 1.25;
         v.center = [159.25, 119.75];
