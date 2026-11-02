@@ -293,7 +293,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     let content = revision.wrapping_sub(st.view_revision);
     let id = st.doc.id.0;
     if view.is_plain(&st.doc) {
-        if let Some(c) = app.channel_views.get_mut(&id) {
+        if let Some(c) = crate::view_visibility::channel_caches_mut(app).get_mut(&id) {
             c.valid = false;
         }
         return None;
@@ -301,7 +301,12 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     // Mask and channel views are drawn over the canvas: show the same live document,
     // otherwise an opaque grayscale mask hides the stroke until it is committed (#2078).
     // The plain-composite path above needs no preview work.
-    let (doc, preview_key) = crate::canvas::filter_channel_preview(app, idx, ctx).unwrap_or_else(|| crate::canvas::display_doc(app, idx));
+    let (doc, preview_key) = if app.view_composites.rendering_window.is_some() {
+        crate::canvas::display_doc(app, idx)
+    } else {
+        crate::canvas::filter_channel_preview(app, idx, ctx).unwrap_or_else(|| crate::canvas::display_doc(app, idx))
+    };
+    let (doc, preview_key) = crate::view_visibility::render_document(app, idx, doc, preview_key);
     // Interface ▸ Show Channels in Color tints single colour channel views on the canvas too,
     // not just the panel thumbnails (#2385). The view key carries the flag and the Layer Mask
     // Display Options, so changing them rebuilds the texture.
@@ -312,14 +317,14 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     let factor = doc.size.width.max(doc.size.height).div_ceil(max_side).max(1);
     // A live preview can mutate the same Arc in place. Content revision and preview_key, not
     // pointer identity, determine whether these flattened pixels are still current.
-    if let Some(c) = app.channel_views.get_mut(&id) {
+    if let Some(c) = crate::view_visibility::channel_caches_mut(app).get_mut(&id) {
         if let Some(s) = c.source.as_mut().filter(|s| s.factor == factor && s.content == content && s.preview_key == preview_key) {
             s.revision = revision;
         } else {
             c.source = None;
         }
     }
-    if let Some(c) = app.channel_views.get(&id)
+    if let Some(c) = crate::view_visibility::channel_caches(app).and_then(|caches| caches.get(&id))
         && c.key == key
         && c.factor == factor
         && c.valid
@@ -328,9 +333,10 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     {
         return Some(c.tex.id());
     }
-    let damage =
-        app.channel_views.get(&id).and_then(|c| crate::canvas::damage_since(app, idx, (c.revision, c.preview_key), (revision, preview_key), 0, last_damage));
-    if let Some(c) = app.channel_views.get_mut(&id)
+    let damage = crate::view_visibility::channel_caches(app)
+        .and_then(|caches| caches.get(&id))
+        .and_then(|c| crate::canvas::damage_since(app, idx, (c.revision, c.preview_key), (revision, preview_key), 0, last_damage));
+    if let Some(c) = crate::view_visibility::channel_caches_mut(app).get_mut(&id)
         && c.key == key
         && c.factor == factor
         && c.valid
@@ -352,13 +358,13 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
         return Some(c.tex.id());
     }
     let b = doc.bounds();
-    let cached = app.channel_views.get(&id).and_then(|c| c.source.as_ref()).map(|s| s.pixels.as_slice());
+    let cached = crate::view_visibility::channel_caches(app).and_then(|caches| caches.get(&id)).and_then(|c| c.source.as_ref()).map(|s| s.pixels.as_slice());
     let mut fresh = None;
     let px = render_with_source(&doc, &view, b, factor, look, active, CompositeSource { cached, fresh: &mut fresh })?;
     let new_source = fresh.is_some();
     let size = [b.width().div_ceil(factor) as usize, b.height().div_ceil(factor) as usize];
     let img = egui::ColorImage::new(size, px);
-    match app.channel_views.get_mut(&id) {
+    match crate::view_visibility::channel_caches_mut(app).get_mut(&id) {
         Some(c) if c.tex.size() == size => {
             c.tex.set(img, TextureOptions::LINEAR);
             c.revision = revision;
@@ -373,17 +379,17 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
         _ => {
             let tex = ctx.load_texture(format!("channel-view-{id}"), img, TextureOptions::LINEAR);
             let source = fresh.map(|pixels| SampledComposite { revision, content, preview_key, factor, pixels });
-            app.channel_views.insert(id, Cache { revision, key, preview_key, factor, valid: true, tex, source });
+            crate::view_visibility::channel_caches_mut(app).insert(id, Cache { revision, key, preview_key, factor, valid: true, tex, source });
         }
     }
     if new_source {
-        for (other_id, c) in &mut app.channel_views {
+        for (other_id, c) in crate::view_visibility::channel_caches_mut(app) {
             if *other_id != id {
                 c.source = None;
             }
         }
     }
-    app.channel_views.get(&id).map(|c| c.tex.id())
+    crate::view_visibility::channel_caches(app).and_then(|caches| caches.get(&id)).map(|c| c.tex.id())
 }
 
 #[cfg(test)]

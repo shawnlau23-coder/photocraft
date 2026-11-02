@@ -167,11 +167,12 @@ impl GridLines {
 pub fn paint(app: &mut PhotocraftApp, painter: &Painter, xf: &ViewXform, idx: usize, output: Option<u32>, visible: DRect) {
     let Some((id, revision)) = app.session.documents().get(idx).map(|st| (st.doc.id, st.revision)) else { return };
     let (doc, preview_key) = crate::canvas::display_doc(app, idx);
+    let (doc, preview_key) = crate::view_visibility::render_document(app, idx, doc, preview_key);
     let need = visible.intersect(&doc.bounds());
     if need.is_empty() {
         return;
     }
-    let Some(cache) = app.canvases.get_mut(&crate::canvas::cache_key(id, output)) else { return };
+    let Some(cache) = crate::view_visibility::cache_mut(app, id, output) else { return };
     if !cache.grid.as_ref().is_some_and(|g| g.covers(revision, preview_key, &need)) {
         cache.grid = Some(GridLines::build(&doc, revision, preview_key, cache_region(visible, doc.bounds())));
     }

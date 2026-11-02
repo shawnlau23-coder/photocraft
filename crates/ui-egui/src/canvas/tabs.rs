@@ -774,6 +774,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     app.ui.windows.retain(|w| w.open);
+    crate::view_visibility::retain(app);
 }
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the

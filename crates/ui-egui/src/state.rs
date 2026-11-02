@@ -190,6 +190,10 @@ impl Default for View {
 /// An extra OS window showing a document ("Window → Arrange → New Window for Document").
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DocWindow {
+    /// Display-only visibility, initialized from canonical layers when this window opens.
+    /// Never persisted in document formats or restored across document sessions.
+    #[serde(skip)]
+    pub visibility: crate::view_visibility::Visibility,
     pub id: u64,
     pub document: usize,
     pub view: View,

@@ -32,6 +32,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
+        "viewVisibility": crate::view_visibility::inspect(app),
         "toolOptions": app.ui.tool_options,
         "perspectiveCrop": app.ui.perspective_crop,
         "strokeEditor": app.ui.stroke_editor,

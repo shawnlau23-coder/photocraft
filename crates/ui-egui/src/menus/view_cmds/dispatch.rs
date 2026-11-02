@@ -5,7 +5,7 @@ use super::{FONT_PREVIEW, LANGUAGE, LAYOUTS, PIXEL_ASPECTS, PhotocraftApp, SCREE
 
 /// Ids handled here (live menu items).
 pub fn handles(id: &str) -> bool {
-    if crate::linked_cursor::handles(id) {
+    if crate::linked_cursor::handles(id) || crate::view_visibility::handles(id) {
         return true;
     }
     if let Some(k) = id.strip_prefix("view.show.") {
@@ -88,6 +88,7 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
         // Full Screen Mode shows a document, so without one it is unavailable, as in Photoshop
         // (#9349); with none open, Cycle can only bring a full screen mode back to Standard.
         "view.screenMode.cycle" => app.ui.text_edit.is_none() && (doc || app.ui.view.screen_mode != "standard"),
+        "view.layerVisibility" | "view.layerVisibility.showOnly" => doc,
         "view.screenMode.fullScreen" | "view.screenMode.fullScreenWithMenuBar" => doc,
         "view.twoHundredPercent" | "view.printSize" | "view.fitLayersOnScreen" | "view.rotateView" | "view.resetView" => doc,
         "view.fitArtboardOnScreen" => app.session.active().is_some_and(|d| d.doc.has_artboards()),
@@ -273,6 +274,9 @@ fn flag_param(p: &Value, cur: bool) -> bool {
 fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
     if crate::linked_cursor::handles(id) {
         return crate::linked_cursor::command(app, ctx, id, p);
+    }
+    if crate::view_visibility::handles(id) {
+        return crate::view_visibility::command(app, ctx, id, p);
     }
     if let Some((panel, tab)) = panel_tab(app, id) {
         let group = crate::dock::Group::from_key(panel);

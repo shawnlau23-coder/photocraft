@@ -90,7 +90,9 @@ impl PhotocraftApp {
         let document_id = self.session.documents().get(document)?.doc.id;
         let main = std::mem::replace(self.ui.views.get_mut(document)?, camera);
         let (rect, ppp) = (self.last_canvas_rect, self.ppp);
+        let rendering_window = self.view_composites.rendering_window.replace(id);
         let result = draw(self);
+        self.view_composites.rendering_window = rendering_window;
         let document = self.session.documents().iter().position(|st| st.doc.id == document_id);
         if let Some(slot) = document.and_then(|i| self.ui.views.get_mut(i)) {
             let camera = std::mem::replace(slot, main);

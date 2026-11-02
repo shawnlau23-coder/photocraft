@@ -111,11 +111,35 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         empty(ui, tl!("No document"));
         return;
     };
-    let doc = st.doc.clone();
+    let canonical = st.doc.clone();
     let active = st.active_layer;
-    let active_layer = active.and_then(|id| doc.layer(id));
     let selection = st.selected_layers();
     let isolated = st.isolated_layers.clone();
+    // Retain the last document target while clicking the root panel. An explicit target menu
+    // also makes the operation accessible without relying on native focus event ordering.
+    let windows: Vec<u64> = app.ui.windows.iter().filter(|w| w.open && Some(w.document) == app.session.active_index()).map(|w| w.id).collect();
+    if !windows.is_empty() {
+        let target = crate::view_visibility::focused_window(app).map_or_else(|| "Visibility: Main View".into(), |id| format!("Visibility: Window {id}"));
+        ui.menu_button(target, |ui| {
+            if ui.button("Main View (document visibility)").clicked() {
+                app.ui.focused_window = None;
+                ui.close();
+            }
+            for id in windows {
+                if ui.button(format!("Window {id} (display only)")).clicked() {
+                    app.ui.focused_window = Some(id);
+                    ui.close();
+                }
+            }
+        });
+    }
+    let visibility_window = crate::view_visibility::focused_window(app);
+    let doc = visibility_window.map_or_else(|| canonical.clone(), |id| crate::view_visibility::project(app, id, canonical.clone()).0);
+    if let Some(id) = visibility_window {
+        ui.label(format!("Window {id}: display-only visibility"));
+        ui.small("Other layer controls edit the shared document.");
+    }
+    let active_layer = active.and_then(|id| doc.layer(id));
     let mut actions: Vec<(String, Value)> = Vec::new();
 
     let t = Tokens::get(ui.ctx());
@@ -509,6 +533,9 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     for (id, p) in actions {
+        if crate::view_visibility::panel_action(app, ui.ctx(), visibility_window, &id, &p) {
+            continue;
+        }
         // A row click commits even when it selects the layer already being edited (#5584).
         // Finish before selection changes so the existing type session keeps its own target.
         if id == "layer.select" && app.ui.text_edit.is_some() {

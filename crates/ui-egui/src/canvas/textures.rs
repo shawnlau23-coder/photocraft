@@ -134,7 +134,8 @@ pub(crate) fn ensure_texture_in_view(
     let committed = app.session.documents().get(idx).map(|st| st.doc.bounds()).unwrap_or(doc.bounds());
     let mut bounds = committed;
     let mut reduced = false;
-    if let Some((preview, key)) = filter_channel_preview(app, idx, ctx) {
+    let independent = app.view_composites.rendering_window.is_some();
+    if !independent && let Some((preview, key)) = filter_channel_preview(app, idx, ctx) {
         let k = app.filter_preview.as_ref().map_or(1, |p| p.key.k.max(1));
         bounds = preview_bounds(committed.size(), preview.size, k);
         (doc, preview_key, reduced) = (preview, key, k > 1);
@@ -150,12 +151,13 @@ pub(crate) fn ensure_texture_in_view(
     {
         (doc, preview_key) = (st.doc.clone(), 0);
     }
+    (doc, preview_key) = crate::view_visibility::render_document(app, idx, doc, preview_key);
     let (display, display_key) = canvas_display(app, &doc, output);
-    let seen = app.canvases.get(&cache_key(id, output)).map(|c| (c.tex_revision, c.tex_preview_key));
+    let seen = crate::view_visibility::cache(app, id, output).map(|c| (c.tex_revision, c.tex_preview_key));
     let damage = seen.and_then(|seen| damage_since(app, idx, seen, (revision, preview_key), display_key, last_damage)).filter(|_| !reduced);
     // The detail texture can lag the whole-document one (made or moved later): its own damage.
     let detail_seen = view.and_then(|v| {
-        let c = app.canvases.get(&cache_key(id, output))?;
+        let c = crate::view_visibility::cache(app, id, output)?;
         c.detail.iter().find(|(k, _)| *k == v.key).map(|(_, d)| (d.revision, d.preview_key))
     });
     let detail_damage = match detail_seen {
@@ -164,7 +166,11 @@ pub(crate) fn ensure_texture_in_view(
         None => None,
     };
     let preview_key = preview_key ^ display_key;
-    let cache = app.canvases.entry(cache_key(id, output)).or_insert(CanvasCache {
+    let caches = match app.view_composites.rendering_window {
+        Some(window) => app.view_composites.caches.entry(window).or_default(),
+        None => &mut app.canvases,
+    };
+    let cache = caches.entry(cache_key(id, output)).or_insert(CanvasCache {
         revision: 0,
         texture: None,
         scale: 1.0,
@@ -320,6 +326,11 @@ fn render_detail(
 /// rectangle did: the last edit's damage, or the live stroke's dabs since then. Cached keys have
 /// the colour display's key folded in (`^ display_key`); `now`'s is still raw.
 pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u64), display_key: u64, last_damage: Option<DRect>) -> Option<DRect> {
+    // Canonical damage can exclude effects of layers visible only in this view. Recompose
+    // conservatively on changes; unchanged view textures still remain cached.
+    if app.view_composites.rendering_window.is_some() {
+        return None;
+    }
     // A brush stroke committed with the pixels its live preview already showed: only the steps
     // this cache hadn't shown yet (usually nothing), not the stroke's whole bounding box.
     if seen.0 + 1 == now.0

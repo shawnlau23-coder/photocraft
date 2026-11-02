@@ -53,6 +53,7 @@ pub mod screenshot;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
+pub mod view_visibility;
 pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, RenderIconFn};
 pub(crate) mod tool_memory;
 pub mod updates_ui;
@@ -341,6 +342,7 @@ pub struct PhotocraftApp {
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,
+    pub(crate) view_composites: view_visibility::Composites,
     /// Navigator textures belong to open documents, not the lifetime of the egui context.
     navigator_textures: HashMap<DocId, canvas::NavigatorCache>,
     /// `canvas::display_doc`'s live-adjust and Duotone documents per document: (snapshot,

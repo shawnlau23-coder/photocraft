@@ -380,7 +380,7 @@ fn paint_canvas(
     let mut on_gpu = false;
     // A flipped or pixel-aspect-corrected view draws through the CPU path (the GPU canvas shader
     // has no mirroring or non-square pixels). Rotation stays on the GPU: it is a view uniform.
-    let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
+    let gpu_ok = app.view_composites.rendering_window.is_none() && crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
     if app.gpu.is_some() {
         if gpu_ok {
             crate::render_path::view_ok(app, doc.id.0);
@@ -468,7 +468,7 @@ fn paint_canvas(
         let checkerboard = app.session.prefs().transparency_and_gamut.square().map(|square| (checker(app, ctx), square));
         // Repeated-quad coverage is not proven identical on all Pattern Preview adapters.
         // Retain its legacy checker submissions, including the central document's.
-        let opaque = !app.ui.view.pattern_preview && app.canvases.get(&cache_key(doc.id, output)).is_some_and(|c| c.texture_opaque) && tex.is_some();
+        let opaque = !app.ui.view.pattern_preview && crate::view_visibility::cache(app, doc.id, output).is_some_and(|c| c.texture_opaque) && tex.is_some();
         paint_cpu_document(painter, &xf, area, rotated, checkerboard, tex, opaque);
         if let Some((detail, area)) = textures.and_then(|t| t.detail) {
             paint_cpu_detail(painter, &xf, doc.bounds(), rotated, checkerboard, detail, area);
@@ -512,7 +512,8 @@ fn paint_canvas(
         let dot_tex = dots(ctx, &t);
         // Cut around the layers as they are shown, so a loose layer dragged with the Move tool
         // (or otherwise previewed) is not covered where it now draws.
-        let shown = display_doc(app, idx).0;
+        let (shown, key) = display_doc(app, idx);
+        let shown = crate::view_visibility::render_document(app, idx, shown, key).0;
         // Each piece is painted as its own quad (the painter clips to the canvas), so a
         // rotated view does not paint a piece's bounding box over the boards or loose work.
         let fill = |q: &[Pos2; 4], tex: Option<egui::TextureId>, color: Color32| {
