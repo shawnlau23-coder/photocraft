@@ -1,6 +1,8 @@
 use super::*;
 use crate::{Services, menus};
 
+mod opacity_tests;
+
 fn fixture() -> (PhotocraftApp, egui::Context, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 16, "height": 12, "background": "white"})).unwrap();
@@ -126,7 +128,7 @@ fn panel_routes_only_visibility_and_preserves_cameras_and_focus_target() {
     assert!(panel_action(&mut app, &ctx, Some(w), "layer.setProps", &json!({"layer": blue.0, "visible": false})));
     assert!(!shown(&mut app, w).layer(blue).unwrap().visible);
     assert!(app.session.active().unwrap().doc.layer(blue).unwrap().visible);
-    assert!(!panel_action(&mut app, &ctx, Some(w), "layer.setProps", &json!({"layer": blue.0, "opacity": 0.5})));
+    assert!(!panel_action(&mut app, &ctx, Some(w), "layer.setProps", &json!({"layer": blue.0, "fill": 0.5})));
     assert!(!panel_action(&mut app, &ctx, None, "layer.setProps", &json!({"layer": blue.0, "visible": false})));
     assert_eq!(cameras, (app.ui.views.clone(), app.ui.windows[0].view.clone()));
     // Clicking root panel chrome retains the child's logical target; clicking canvas selects main.

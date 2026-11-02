@@ -122,10 +122,17 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         });
         ui.add_space(6.0);
     }
-    let mut o = layer.opacity * 100.0;
+    let opacity_window = crate::view_visibility::focused_window(app);
+    let mut o = crate::view_visibility::focused_opacity(app, layer.id).unwrap_or(layer.opacity) * 100.0;
+    if let Some(id) = opacity_window {
+        ui.small(format!("Opacity: Window {id} (display only)"));
+    }
     let r = widgets::slider_row(ui, tl!("Opacity"), &mut o, 0.0..=100.0, "%", None);
     if r.drag_stopped() || (r.changed() && !r.dragged()) {
-        let _ = app.run("layer.setProps", json!({"layer": layer.id.0, "opacity": o / 100.0}));
+        let params = json!({"layer": layer.id.0, "opacity": o / 100.0});
+        if !crate::view_visibility::panel_action(app, ui.ctx(), opacity_window, "layer.setProps", &params) {
+            let _ = app.run("layer.setProps", params);
+        }
     }
     let mut f = layer.fill_opacity * 100.0;
     let r = widgets::slider_row(ui, crate::i18n::tr_ctx(crate::i18n::current(), "layers", "Fill"), &mut f, 0.0..=100.0, "%", None);

@@ -88,7 +88,7 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
         // Full Screen Mode shows a document, so without one it is unavailable, as in Photoshop
         // (#9349); with none open, Cycle can only bring a full screen mode back to Standard.
         "view.screenMode.cycle" => app.ui.text_edit.is_none() && (doc || app.ui.view.screen_mode != "standard"),
-        "view.layerVisibility" | "view.layerVisibility.showOnly" => doc,
+        "view.layerVisibility" | "view.layerVisibility.showOnly" | "view.layerOpacity" => doc,
         "view.screenMode.fullScreen" | "view.screenMode.fullScreenWithMenuBar" => doc,
         "view.twoHundredPercent" | "view.printSize" | "view.fitLayersOnScreen" | "view.rotateView" | "view.resetView" => doc,
         "view.fitArtboardOnScreen" => app.session.active().is_some_and(|d| d.doc.has_artboards()),

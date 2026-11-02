@@ -119,7 +119,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // also makes the operation accessible without relying on native focus event ordering.
     let windows: Vec<u64> = app.ui.windows.iter().filter(|w| w.open && Some(w.document) == app.session.active_index()).map(|w| w.id).collect();
     if !windows.is_empty() {
-        let target = crate::view_visibility::focused_window(app).map_or_else(|| "Visibility: Main View".into(), |id| format!("Visibility: Window {id}"));
+        let target = crate::view_visibility::focused_window(app).map_or_else(|| "View: Main View".into(), |id| format!("View: Window {id}"));
         ui.menu_button(target, |ui| {
             if ui.button("Main View (document visibility)").clicked() {
                 app.ui.focused_window = None;
@@ -136,7 +136,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let visibility_window = crate::view_visibility::focused_window(app);
     let doc = visibility_window.map_or_else(|| canonical.clone(), |id| crate::view_visibility::project(app, id, canonical.clone()).0);
     if let Some(id) = visibility_window {
-        ui.label(format!("Window {id}: display-only visibility"));
+        ui.label(format!("Window {id}: display-only eyes and opacity"));
         ui.small("Other layer controls edit the shared document.");
     }
     let active_layer = active.and_then(|id| doc.layer(id));
@@ -162,13 +162,20 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             vec![l.id]
         };
         let targets = if ids.len() > 1 { json!({"layers": ids.iter().map(|id| id.0).collect::<Vec<_>>()}) } else { json!({"layer": l.id.0}) };
+        // Display opacity can include the Background without converting it into Layer 0.
+        // Blend, Fill and lock targets retain their canonical behavior.
+        let opacity_targets = if visibility_window.is_some() && selection.len() > 1 && selection.contains(&l.id) {
+            json!({"layers": selection.iter().map(|id| id.0).collect::<Vec<_>>()})
+        } else {
+            targets.clone()
+        };
         // Photoshop greys blend mode, Opacity and Fill for the Background layer. (With the
         // Background among several selected, what Photoshop does awaits a check: #5856.)
         let bg = crate::doc_props_ui::is_background(&doc, l);
         // Pass Through is a group's mode: offered only when every target is a group.
         let all_groups = ids.iter().all(|id| doc.layer(*id).is_some_and(|x| x.is_group()));
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(!bg, |ui| {
+            ui.add_enabled_ui(!bg || visibility_window.is_some(), |ui| {
                 let mut m = l.blend;
                 // Reserve space for the numeric field first. On a narrow dock, hide the
                 // redundant visible Opacity label rather than force the dropdown beyond
@@ -176,8 +183,11 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let opacity_label = if t.pro { tl!("Opacity:") } else { tl!("Opacity") };
                 let (blend_width, show_opacity_label) =
                     opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
-                let (chosen, hovered) =
-                    widgets::dropdown_wheel_hovered(ui, "blend", tl!("Blend Mode"), &mut m, &blend_options(all_groups, l.blend), blend_width);
+                let (chosen, hovered) = ui
+                    .add_enabled_ui(!bg, |ui| {
+                        widgets::dropdown_wheel_hovered(ui, "blend", tl!("Blend Mode"), &mut m, &blend_options(all_groups, l.blend), blend_width)
+                    })
+                    .inner;
                 // One step per choice: a click, an arrow key or each wheel notch (#1747).
                 for m in &chosen {
                     let mut p = targets.clone();
@@ -196,7 +206,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         widgets::PopupFieldResponse::default()
                     };
                     if field.changed || scrub.changed {
-                        actions.push(pct_action(&targets, "opacity", o, scrub.drag.or(field.drag)));
+                        actions.push(pct_action(&opacity_targets, "opacity", o, scrub.drag.or(field.drag)));
                     }
                 });
             });
