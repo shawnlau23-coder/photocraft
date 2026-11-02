@@ -38,6 +38,7 @@ mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
 pub(crate) mod last_brush;
+pub mod linked_cursor;
 pub mod links;
 pub mod menu_catalog;
 pub mod menus;

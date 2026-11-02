@@ -44,6 +44,7 @@ impl PhotocraftApp {
         self.last_frame_time = now;
         self.sync_views();
         self.update_view_focus(ctx);
+        crate::linked_cursor::prune(self, ctx);
         crate::type_font_preview::follow_hover(self, ctx);
         self.check_gpu(ctx);
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -324,6 +325,7 @@ impl PhotocraftApp {
         camera_raw_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);
         canvas::extra_windows(self, &ctx);
+        crate::linked_cursor::prune(self, &ctx);
         notices::show(self, &ctx);
         updates_ui::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);

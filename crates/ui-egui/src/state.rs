@@ -414,6 +414,9 @@ pub struct UiState {
     /// None selects the main document canvas. Never restore OS focus from saved UI state.
     #[serde(skip)]
     pub focused_window: Option<u64>,
+    /// Raw document-space pointer for Linked Cursor; never saved with UI or artwork.
+    #[serde(skip)]
+    pub linked_cursor_pointer: Option<crate::linked_cursor::Pointer>,
     pub theme: crate::theme::ThemeKind,
     pub workspace: String,
     pub palette_open: bool,
@@ -595,6 +598,7 @@ impl Default for UiState {
             dialogs: Vec::new(),
             windows: Vec::new(),
             focused_window: None,
+            linked_cursor_pointer: None,
             theme: crate::theme::ThemeKind::ProMedium,
             workspace: "Essentials".into(),
             palette_open: false,

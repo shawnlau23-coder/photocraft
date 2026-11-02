@@ -104,13 +104,14 @@ use strokes::{HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, pointer_butt
 #[cfg(test)]
 pub(crate) use strokes::{SPOT_HEALING_TRAIL, live_retouch_points};
 pub(crate) use tabs::arranged_cells;
+pub(crate) use tabs::main_canvas_document;
+#[cfg(test)]
+use tabs::move_target_after_filter;
 pub(crate) use tabs::tab_title_at;
 #[cfg(test)]
 use tabs::{TEAR_OFF, pro_tab_title, tab_context_items, tab_drop_index, tab_move_target, tabs, torn_off};
 pub use tabs::{TabStrip, document_area, extra_windows};
 use tabs::{dots, paint_dots};
-#[cfg(test)]
-use tabs::{main_canvas_document, move_target_after_filter};
 #[cfg(test)]
 pub(crate) use textures::detail_plan;
 pub(crate) use textures::{DetailPlan, damage_since, effect_reach, ensure_texture_in_view, retain_gpu_documents, shown_as_document};
@@ -2074,6 +2075,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         camera,
     };
     finish_canvas_view(app, ui, &mut view, &tail);
+    crate::linked_cursor::overlay(app, ui, doc.id, &xf);
     view
 }
 

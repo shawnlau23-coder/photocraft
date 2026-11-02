@@ -5,6 +5,9 @@ use super::{FONT_PREVIEW, LANGUAGE, LAYOUTS, PIXEL_ASPECTS, PhotocraftApp, SCREE
 
 /// Ids handled here (live menu items).
 pub fn handles(id: &str) -> bool {
+    if crate::linked_cursor::handles(id) {
+        return true;
+    }
     if let Some(k) = id.strip_prefix("view.show.") {
         return show_slot(&mut Show::default(), k).is_some() || k == "all";
     }
@@ -117,6 +120,9 @@ pub fn leave_full_screen_without_document(app: &mut PhotocraftApp, ctx: &egui::C
 }
 
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
+    if let Some(checked) = crate::linked_cursor::checked(app.ui.view.linked_cursor, id) {
+        return Some(checked);
+    }
     let o = &app.ui.view;
     if let Some(k) = id.strip_prefix("view.show.") {
         let mut s = o.show;
@@ -265,6 +271,9 @@ fn flag_param(p: &Value, cur: bool) -> bool {
 }
 
 fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+    if crate::linked_cursor::handles(id) {
+        return crate::linked_cursor::command(app, ctx, id, p);
+    }
     if let Some((panel, tab)) = panel_tab(app, id) {
         let group = crate::dock::Group::from_key(panel);
         let collapsed = group.is_some_and(|g| app.ui.dock.is_collapsed(g));

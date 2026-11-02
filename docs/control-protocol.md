@@ -781,3 +781,7 @@ Assign **Select Layer Under Cursor** in Keyboard Shortcuts to choose the topmost
 ### Document-window focus
 
 `ui.focus {"window": id}` focuses an open extra document window and targets subsequent View > Flip Horizontal commands there. `ui.focus {}` (or `{"window": null}`) selects the main canvas. `ui.inspect.focusedWindow` reports the selected extra-window id, or null for the main canvas. Camera reflection is serialized as `views[].flip_horizontal` / `windows[].view.flip_horizontal`, independently of the shared document. A new window copies its source camera initially and then owns its presentation state.
+
+### Linked Cursor
+
+`ui.menu.invoke {"id":"view.linkedCursor","params":{"on":true}}` enables the application-level display aid (disabled by default). The View menu exposes the toggle and Linked Cursor Settings submenus for diameter presets from 2–20 physical screen pixels (default 6) and red/white/black (default red). Commands `view.linkedCursor.size.6` and `view.linkedCursor.color.white` select presets. The toggle command also accepts validated `diameter` (2–20) and `color` parameters alongside explicit `on`. Settings appear in `ui.inspect.view.linked_cursor`; the raw document-space pointer is transient and not serialized. The indicator draws only in other canvases of the same document, using their own cameras; it creates no document edits or undo entries.

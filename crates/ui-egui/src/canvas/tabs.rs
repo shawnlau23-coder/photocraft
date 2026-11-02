@@ -782,7 +782,7 @@ pub(super) fn docked_document_indices(app: &PhotocraftApp) -> Vec<usize> {
     (0..app.session.documents().len()).filter(|&doc| !crate::view_cmds::document_is_floating(app, doc)).collect()
 }
 
-pub(super) fn main_canvas_document(app: &PhotocraftApp) -> Option<usize> {
+pub(crate) fn main_canvas_document(app: &PhotocraftApp) -> Option<usize> {
     let active = app.session.active_index()?;
     if !crate::view_cmds::document_is_floating(app, active) {
         return Some(active);

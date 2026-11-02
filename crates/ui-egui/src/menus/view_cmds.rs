@@ -91,6 +91,7 @@ impl Default for SnapTo {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ViewOptions {
+    pub linked_cursor: crate::linked_cursor::Settings,
     /// "standard" | "fullScreenWithMenuBar" | "fullScreen" (View › Screen Mode, F cycles).
     pub screen_mode: String,
     /// View › Extras (⌘H): master switch for guides, grid, edges and other overlays.
@@ -125,6 +126,7 @@ pub(crate) fn default_guide_layout() -> Value {
 impl Default for ViewOptions {
     fn default() -> Self {
         Self {
+            linked_cursor: crate::linked_cursor::Settings::default(),
             screen_mode: "standard".into(),
             extras: true,
             show: Show::default(),
