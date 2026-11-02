@@ -1,15 +1,15 @@
-# Independent layer visibility and opacity (Phases 1 and 2)
+# Independent layer visibility, opacity and blending (Phases 1–3)
 
 Open another view with Window > Arrange > New Window for Document. The existing Layers
 panel follows the last focused document view. Its **View** target menu (the Phase 1 visibility
 selector) can explicitly select Main View or a numbered secondary window. Main View's eyes
-and opacity edit normal document properties. A secondary target shows a display-only notice:
-its eyes, eye sweep, Alt-eye solo and opacity affect only that window. Other layer controls
+and opacity/blend controls edit normal document properties. A secondary target shows a display-only notice:
+its eyes, eye sweep, Alt-eye solo, opacity and blending affect only that window. Other layer controls
 still edit the shared document. The existing opacity number field, popup slider, scrub label
-and multiple-layer selection are reused. Secondary Background opacity is display-only and
-does not convert the canonical Background into Layer 0.
+and multiple-layer selection are reused, along with the existing blending dropdown. Secondary Background opacity/blending are display-only and
+do not convert the canonical Background into Layer 0.
 
-Each secondary window captures canonical visibility and opacity when it opens, even if
+Each secondary window captures canonical visibility, opacity and blending when it opens, even if
 another secondary window is focused. Later canonical changes do not replace existing
 secondary values. New layers inherit canonical values when first encountered; removed layer IDs
 are discarded; reordered layers retain their values. Undoing a deletion reintroduces the
@@ -19,6 +19,7 @@ in document files or restored across sessions.
 ## Architecture
 
 - `DocWindow.visibility` holds layer-ID/boolean values, layer-ID/f32 opacity values in 0..1,
+  layer-ID/`BlendMode` values,
   and its own visibility-only solo/restore snapshot. It is excluded from serialization.
   Main views have no overrides. The existing type/field names are retained for compatibility.
 - `view_visibility.rs` builds a memoized render-only metadata projection from the current
@@ -31,9 +32,9 @@ in document files or restored across sessions.
   The main view retains its normal GPU/CPU path. Secondary views use the existing CPU
   compositor, preserving groups, clipping, masks, blending, color management and reflection.
 - Projection identity includes the source snapshot, canonical revision, live-preview key
-  and visibility/opacity values. Shared edits invalidate the affected secondary composites lazily.
-  A secondary opacity change only changes that window's projection identity. Equal effective
-  f32 values preserve the projection and texture; repeated slider events create no history.
+  and visibility/opacity/blend values. Shared edits invalidate the affected secondary composites lazily.
+  A secondary setting change only changes that window's projection identity. Equal effective
+  values preserve the projection and texture; repeated slider/dropdown events create no history.
   Damage rectangles are conservatively disabled for secondary composites: a layer hidden
   canonically can have visible effects in a secondary view.
 - Secondary composites are synchronous and never start or poll document-scoped GPU
@@ -64,6 +65,16 @@ Adjustment layers use the existing CPU compositor's opacity semantics exactly; n
 algorithm or blend interpretation is changed. Group, mask, clipping and artboard metadata
 are preserved by the same projection used in Phase 1.
 
+Secondary blend dropdowns apply on a choice (click, arrow key or wheel); hovering a mode does
+not preview it. PhotoCraft's existing hover preview is document-wide and is suppressed when
+targeting a secondary view so it cannot temporarily change the main canvas. Main-view hover
+preview remains unchanged; a secondary projection also preserves its own modes while the main
+view previews a different mode. Layer-style dialogs, keyboard blend shortcuts and engine
+commands remain canonical editing paths. Use the Layers dropdown or `view.layerBlend` for
+display-only blending. Pass Through remains group-only, matching the canonical command.
+Special layer types use exactly the existing CPU compositor semantics; no new blend behavior
+is added for adjustment layers, nested groups or artboards. Masks remain canonical and shared.
+
 ## Automation
 
 `ui.menu.invoke` accepts these shell commands:
@@ -73,12 +84,17 @@ are preserved by the same projection used in Phase 1.
 {"id":"view.layerVisibility.showOnly","params":{"window":123,"layer":456}}
 {"id":"view.layerOpacity","params":{"window":123,"layer":456,"opacity":0.25}}
 {"id":"view.layerOpacity","params":{"window":123,"layers":[456,789],"opacity":0.75}}
+{"id":"view.layerBlend","params":{"window":123,"layer":456,"blend":"Soft Light"}}
+{"id":"view.layerBlend","params":{"window":123,"layers":[456,789],"blend":"Overlay"}}
 ```
 
 Omit `window` to target the last focused secondary view. Invalid/closed windows and missing
 layers return errors. Opacity requires a finite number from 0 to 1; invalid batch targets
 are rejected before any values change. `ui.inspect.viewVisibility` lists transient visibility
-under `layers` and opacity under `opacity`, keyed by layer ID for each window.
+under `layers`, opacity under `opacity`, and blending under `blend`, keyed by layer ID for
+each window. Blend strings use the canonical command's parser and aliases; inspection uses
+serialized `BlendMode` names. Invalid modes or mixed Pass Through/non-group batches are
+rejected before any value changes.
 Engine `layer.setProps` remains a canonical document-editing command.
 
 ## Phase 1 focused verification
@@ -168,3 +184,35 @@ slider and label scrubbing, Properties opacity, multiple layers, Background, adj
 layers, simultaneous windows and shared painting with independent opacity/visibility.
 
 Phase 2 Windows build passed with cargo build --offline --locked -p photocraft --features heif (optimized dev profile). The updated executable is target/debug/photocraft.exe. Native interaction and visual testing remain manual. Phase 2 changes are uncommitted; nothing was pushed.
+
+## Phase 3 verification and files
+
+Phase 2 was verified committed at `2b34711cb` with a clean tree before Phase 3 editing.
+All 21 focused `view_visibility` tests passed: 15 existing tests and six new blend tests.
+New coverage includes independent modes and canonical inheritance, history/dirty-state and
+`.pcraft`/PSD/PNG export isolation, same-mode/alias cache reuse, per-view cache invalidation,
+shared source tiles and shared mask edits, main/secondary hover isolation, batch validation,
+Pass Through restrictions, independent visibility/opacity and camera preservation, nested
+groups, artboards, adjustments, clipping/masks, and layer/document/window lifecycle cleanup.
+Special layer results are compared with the existing CPU compositor using canonical test
+documents with equivalent properties. No blending or adjustment calculation was changed.
+
+Phase 3 changes these seven files:
+
+- `crates/ui-egui/src/view_visibility.rs`: blend values, projection/cache comparison,
+  command validation, shared layer-target validation, panel routing and hover isolation.
+- `crates/ui-egui/src/state.rs`: presentation-state documentation.
+- `crates/ui-egui/src/menus/view_cmds/dispatch.rs`: enable `view.layerBlend`.
+- `crates/ui-egui/src/panels/layers.rs`: effective-mode dropdown, secondary batch/Background
+  routing, Pass Through option eligibility and scoped hover handling.
+- `crates/ui-egui/src/view_visibility/tests.rs`: register blend tests.
+- `crates/ui-egui/src/view_visibility/tests/blend_tests.rs`: six focused blend tests.
+- `docs/independent-visibility.md`: usage, automation, limitations and verification notes.
+
+Formatting was applied. No comprehensive suite, Clippy, wasm build, benchmark or dependency
+audit was run. Native manual testing should check different modes in multiple windows,
+switching View/layer selection, click/arrow/wheel dropdown choices, visibility and opacity
+combinations, masked/clipped groups and adjustments, shared editing and window/document
+closure. Secondary hover preview is intentionally disabled; main hover preview is retained.
+
+Phase 3 Windows build passed: cargo build --offline --locked -p photocraft --features heif (optimized dev profile). Executable: target/debug/photocraft.exe. Phase 3 changes are uncommitted on feature/independent-views; HEAD remains 2b34711cb. Nothing was pushed. Native visual/interaction verification is pending.

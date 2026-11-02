@@ -1,6 +1,7 @@
 use super::*;
 use crate::{Services, menus};
 
+mod blend_tests;
 mod opacity_tests;
 
 fn fixture() -> (PhotocraftApp, egui::Context, LayerId, LayerId) {

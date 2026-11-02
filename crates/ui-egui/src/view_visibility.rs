@@ -1,8 +1,9 @@
-//! Display-only layer visibility and opacity. Projections never enter Session, history, save or export.
+//! Display-only layer visibility, opacity and blending. Projections never enter Session, history, save or export.
 //! Raster surfaces in the metadata projection retain their existing Arc<Tile> storage.
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Weak};
 
+use photocraft_color::BlendMode;
 use photocraft_doc::{DocId, Document, LayerId};
 use serde_json::{Value, json};
 
@@ -13,6 +14,7 @@ pub struct Visibility {
     document: Option<DocId>,
     layers: BTreeMap<LayerId, bool>,
     opacity: BTreeMap<LayerId, f32>,
+    blend: BTreeMap<LayerId, BlendMode>,
     solo: Option<(LayerId, BTreeMap<LayerId, bool>)>,
 }
 
@@ -23,6 +25,7 @@ impl Visibility {
             document: Some(doc.id),
             layers: layers.iter().map(|(_, _, l)| (l.id, l.visible)).collect(),
             opacity: layers.iter().map(|(_, _, l)| (l.id, display_opacity(l.opacity))).collect(),
+            blend: layers.iter().map(|(_, _, l)| (l.id, l.blend)).collect(),
             solo: None,
         }
     }
@@ -35,8 +38,10 @@ impl Visibility {
         let live: BTreeMap<_, _> = doc.walk().into_iter().map(|(_, _, l)| (l.id, l.visible)).collect();
         self.layers.retain(|id, _| live.contains_key(id));
         self.opacity.retain(|id, _| live.contains_key(id));
+        self.blend.retain(|id, _| live.contains_key(id));
         for (_, _, layer) in doc.walk() {
             self.opacity.entry(layer.id).or_insert_with(|| display_opacity(layer.opacity));
+            self.blend.entry(layer.id).or_insert(layer.blend);
         }
         if self.solo.as_ref().is_some_and(|(id, _)| !live.contains_key(id)) {
             self.solo = None;
@@ -57,6 +62,7 @@ struct Projection {
     source_key: (u64, u64),
     visibility: BTreeMap<LayerId, bool>,
     opacity: BTreeMap<LayerId, f32>,
+    blend: BTreeMap<LayerId, BlendMode>,
     shown: Arc<Document>,
     key: u64,
 }
@@ -116,7 +122,7 @@ pub(crate) fn inspect(app: &PhotocraftApp) -> Value {
             .windows
             .iter()
             .filter(|w| w.open)
-            .map(|w| { json!({"window": w.id, "document": w.visibility.document, "layers": w.visibility.layers, "opacity": w.visibility.opacity}) })
+            .map(|w| { json!({"window": w.id, "document": w.visibility.document, "layers": w.visibility.layers, "opacity": w.visibility.opacity, "blend": w.visibility.blend}) })
             .collect::<Vec<_>>()
     )
 }
@@ -133,11 +139,13 @@ fn project_with_key(app: &mut PhotocraftApp, window: u64, source: Arc<Document>,
     let Some(w) = app.ui.windows.iter().find(|w| w.id == window && w.open && w.visibility.document == Some(source.id)) else { return (source, 0) };
     let visibility = &w.visibility.layers;
     let opacity = &w.visibility.opacity;
+    let blend = &w.visibility.blend;
     if let Some(p) = app.view_composites.projections.get(&window)
         && p.source.ptr_eq(&Arc::downgrade(&source))
         && p.source_key == source_key
         && &p.visibility == visibility
         && &p.opacity == opacity
+        && &p.blend == blend
     {
         return (p.shown.clone(), p.key);
     }
@@ -152,6 +160,9 @@ fn project_with_key(app: &mut PhotocraftApp, window: u64, source: Arc<Document>,
             if let Some(opacity) = opacity.get(&layer.id) {
                 target.opacity = *opacity;
             }
+            if let Some(blend) = blend.get(&layer.id) {
+                target.blend = *blend;
+            }
         }
     }
     let shown = Arc::new(shown);
@@ -159,7 +170,15 @@ fn project_with_key(app: &mut PhotocraftApp, window: u64, source: Arc<Document>,
     let key = app.view_composites.next_key;
     app.view_composites.projections.insert(
         window,
-        Projection { source: Arc::downgrade(&source), source_key, visibility: visibility.clone(), opacity: opacity.clone(), shown: shown.clone(), key },
+        Projection {
+            source: Arc::downgrade(&source),
+            source_key,
+            visibility: visibility.clone(),
+            opacity: opacity.clone(),
+            blend: blend.clone(),
+            shown: shown.clone(),
+            key,
+        },
     );
     (shown, key)
 }
@@ -206,7 +225,7 @@ pub(crate) fn cache_mut(app: &mut PhotocraftApp, doc: DocId, output: Option<u32>
 }
 
 pub(crate) fn handles(id: &str) -> bool {
-    matches!(id, "view.layerVisibility" | "view.layerVisibility.showOnly" | "view.layerOpacity")
+    matches!(id, "view.layerVisibility" | "view.layerVisibility.showOnly" | "view.layerOpacity" | "view.layerBlend")
 }
 
 pub(crate) fn command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
@@ -218,6 +237,9 @@ pub(crate) fn command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p:
     let doc = app.session.documents().get(w.document).ok_or("document is closed")?.doc.clone();
     if id == "view.layerOpacity" {
         return set_opacity(app, ctx, window, &doc, p);
+    }
+    if id == "view.layerBlend" {
+        return set_blend(app, ctx, window, &doc, p);
     }
     let layer = LayerId(p.get("layer").and_then(Value::as_u64).ok_or("layer must be a layer ID")?);
     let path = doc.path_of(layer).ok_or("layer does not exist")?;
@@ -259,19 +281,7 @@ fn set_opacity(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, doc: &
     let value =
         p.get("opacity").and_then(Value::as_f64).filter(|v| v.is_finite() && (0.0..=1.0).contains(v)).ok_or("opacity must be a finite number from 0 to 1")?
             as f32;
-    let ids = match p.get("layers").filter(|v| !v.is_null()) {
-        Some(value) => value
-            .as_array()
-            .filter(|a| !a.is_empty())
-            .ok_or("layers must be a nonempty array of layer IDs")?
-            .iter()
-            .map(|id| id.as_u64().map(LayerId).ok_or("layer must be a layer ID"))
-            .collect::<Result<Vec<_>, _>>()?,
-        None => vec![LayerId(p.get("layer").and_then(Value::as_u64).ok_or("layer must be a layer ID")?)],
-    };
-    if ids.iter().any(|id| doc.layer(*id).is_none()) {
-        return Err("layer does not exist".into());
-    }
+    let ids = target_layers(doc, p)?;
     initialize(app, window);
     let w = app.ui.windows.iter_mut().find(|w| w.id == window && w.open).ok_or("secondary window is closed")?;
     let changed = ids.iter().any(|id| w.visibility.opacity.get(id) != Some(&value));
@@ -285,16 +295,60 @@ fn set_opacity(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, doc: &
     Ok(json!({"window": window, "opacity": value, "changed": changed}))
 }
 
-/// Only visibility and layer-opacity controls are rerouted. Fill, masks and other edits stay canonical.
+fn target_layers(doc: &Document, p: &Value) -> Result<Vec<LayerId>, String> {
+    let ids = match p.get("layers").filter(|v| !v.is_null()) {
+        Some(value) => value
+            .as_array()
+            .filter(|a| !a.is_empty())
+            .ok_or("layers must be a nonempty array of layer IDs")?
+            .iter()
+            .map(|id| id.as_u64().map(LayerId).ok_or("layer must be a layer ID"))
+            .collect::<Result<Vec<_>, _>>()?,
+        None => vec![LayerId(p.get("layer").and_then(Value::as_u64).ok_or("layer must be a layer ID")?)],
+    };
+    if ids.iter().any(|id| doc.layer(*id).is_none()) {
+        return Err("layer does not exist".into());
+    }
+    Ok(ids)
+}
+
+fn set_blend(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, doc: &Document, p: &Value) -> Result<Value, String> {
+    let mode = p.get("blend").and_then(Value::as_str).and_then(photocraft_engine::commands::blend_from_str).ok_or("unknown blend mode")?;
+    let ids = target_layers(doc, p)?;
+    // Match the canonical command's restriction; do not invent Pass Through for non-groups.
+    if mode == BlendMode::PassThrough && ids.iter().any(|id| !doc.layer(*id).is_some_and(|l| l.is_group())) {
+        return Err("Pass Through applies to groups only".into());
+    }
+    initialize(app, window);
+    let w = app.ui.windows.iter_mut().find(|w| w.id == window && w.open).ok_or("secondary window is closed")?;
+    let changed = ids.iter().any(|id| w.visibility.blend.get(id) != Some(&mode));
+    if changed {
+        for id in ids {
+            w.visibility.blend.insert(id, mode);
+        }
+        ctx.request_repaint_of(egui::ViewportId::from_hash_of(("docwin", window)));
+        ctx.request_repaint();
+    }
+    Ok(json!({"window": window, "blend": mode.label(), "changed": changed}))
+}
+
+/// The existing hover preview is document-wide. Secondary dropdowns commit only on a choice,
+/// so hovering cannot temporarily change the main canvas or leak through another view.
+pub(crate) fn blend_hover(app: &mut PhotocraftApp, window: Option<u64>, layers: &[LayerId], mode: Option<BlendMode>) {
+    crate::blend_preview::hover(app, layers, if window.is_none() { mode } else { None });
+}
+
+/// Only visibility, opacity and blend controls are rerouted. Fill, masks and other edits stay canonical.
 pub(crate) fn panel_action(app: &mut PhotocraftApp, ctx: &egui::Context, window: Option<u64>, id: &str, p: &Value) -> bool {
     let Some(window) = window else { return false };
     let command_id = match id {
         "layer.setProps" if p.get("visible").is_some() => "view.layerVisibility",
         "layer.setProps" if p.get("opacity").is_some() => "view.layerOpacity",
+        "layer.setProps" if p.get("blend").is_some() => "view.layerBlend",
         "layer.showOnly" => "view.layerVisibility.showOnly",
         _ => return false,
     };
-    let params = json!({"window": window, "layer": p.get("layer"), "layers": p.get("layers"), "visible": p.get("visible"), "opacity": p.get("opacity")});
+    let params = json!({"window": window, "layer": p.get("layer"), "layers": p.get("layers"), "visible": p.get("visible"), "opacity": p.get("opacity"), "blend": p.get("blend")});
     if let Err(error) = command(app, ctx, command_id, &params) {
         app.ui.status = error;
         app.ui.status_error = true;

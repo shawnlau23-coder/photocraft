@@ -136,7 +136,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let visibility_window = crate::view_visibility::focused_window(app);
     let doc = visibility_window.map_or_else(|| canonical.clone(), |id| crate::view_visibility::project(app, id, canonical.clone()).0);
     if let Some(id) = visibility_window {
-        ui.label(format!("Window {id}: display-only eyes and opacity"));
+        ui.label(format!("Window {id}: display-only eyes, opacity and blend"));
         ui.small("Other layer controls edit the shared document.");
     }
     let active_layer = active.and_then(|id| doc.layer(id));
@@ -162,8 +162,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             vec![l.id]
         };
         let targets = if ids.len() > 1 { json!({"layers": ids.iter().map(|id| id.0).collect::<Vec<_>>()}) } else { json!({"layer": l.id.0}) };
-        // Display opacity can include the Background without converting it into Layer 0.
-        // Blend, Fill and lock targets retain their canonical behavior.
+        // Display opacity/blending can include Background without converting it into Layer 0.
+        // Fill and lock targets retain their canonical behavior.
         let opacity_targets = if visibility_window.is_some() && selection.len() > 1 && selection.contains(&l.id) {
             json!({"layers": selection.iter().map(|id| id.0).collect::<Vec<_>>()})
         } else {
@@ -173,7 +173,11 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // Background among several selected, what Photoshop does awaits a check: #5856.)
         let bg = crate::doc_props_ui::is_background(&doc, l);
         // Pass Through is a group's mode: offered only when every target is a group.
-        let all_groups = ids.iter().all(|id| doc.layer(*id).is_some_and(|x| x.is_group()));
+        let all_groups = if visibility_window.is_some() && selection.len() > 1 && selection.contains(&l.id) {
+            selection.iter().all(|id| doc.layer(*id).is_some_and(|x| x.is_group()))
+        } else {
+            ids.iter().all(|id| doc.layer(*id).is_some_and(|x| x.is_group()))
+        };
         ui.horizontal(|ui| {
             ui.add_enabled_ui(!bg || visibility_window.is_some(), |ui| {
                 let mut m = l.blend;
@@ -184,18 +188,19 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let (blend_width, show_opacity_label) =
                     opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
                 let (chosen, hovered) = ui
-                    .add_enabled_ui(!bg, |ui| {
+                    .add_enabled_ui(!bg || visibility_window.is_some(), |ui| {
                         widgets::dropdown_wheel_hovered(ui, "blend", tl!("Blend Mode"), &mut m, &blend_options(all_groups, l.blend), blend_width)
                     })
                     .inner;
                 // One step per choice: a click, an arrow key or each wheel notch (#1747).
                 for m in &chosen {
-                    let mut p = targets.clone();
+                    let mut p = if visibility_window.is_some() { opacity_targets.clone() } else { targets.clone() };
                     p["blend"] = json!(m.label());
                     actions.push(("layer.setProps".into(), p));
                 }
-                // Hovering a mode previews it on the canvas (#970).
-                crate::blend_preview::hover(app, &ids, hovered.filter(|_| chosen.is_empty()));
+                // Main-view hover previews remain document-wide (#970); secondary choices
+                // apply only when selected so their hover never changes the main canvas.
+                crate::view_visibility::blend_hover(app, visibility_window, &ids, hovered.filter(|_| chosen.is_empty()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut o = l.opacity * 100.0;
                     let field = widgets::popup_value_field(ui, opacity_label, &mut o, 0.0..=100.0, "%", LAYER_PCT_W);
