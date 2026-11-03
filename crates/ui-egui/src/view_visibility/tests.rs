@@ -1,6 +1,7 @@
 use super::*;
 use crate::{Services, menus};
 
+mod adjustment_tests;
 mod blend_tests;
 mod opacity_tests;
 

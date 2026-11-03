@@ -68,7 +68,8 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     ui.horizontal(|ui| {
         ch = editor_channel_picker(ui, cx.mem.with("levels-ch"), &channels);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).clicked();
+            let disabled = ui.data(|data| data.get_temp::<bool>(cx.mem.with("disable-levels-auto"))).unwrap_or(false);
+            auto = ui.add_enabled_ui(cx.hist.is_some() && !disabled, |ui| widgets::secondary_button(ui, tl!("Auto"), 0.0).clicked()).inner;
         });
     });
     let (chan, _, hist_i) = channels.get(ch).cloned().unwrap_or((ToneChannel { key: "", label: "" }, String::new(), 0));

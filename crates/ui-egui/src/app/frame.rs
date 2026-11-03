@@ -44,6 +44,7 @@ impl PhotocraftApp {
         self.last_frame_time = now;
         self.sync_views();
         self.update_view_focus(ctx);
+        crate::view_visibility::adjustments::follow(self, ctx);
         crate::linked_cursor::prune(self, ctx);
         crate::type_font_preview::follow_hover(self, ctx);
         self.check_gpu(ctx);

@@ -34,6 +34,9 @@ fn eyedropper(point: &str) -> Option<CurvesEyedropper> {
 /// The armed picker if it still applies: same tool, the layer still the active Levels or Curves
 /// layer, and the point supported in the document's colour mode.
 pub fn armed(app: &PhotocraftApp) -> Option<(LayerId, &str)> {
+    if crate::view_visibility::focused_window(app).is_some() {
+        return None;
+    }
     let picker = app.ui.layer_picker.as_ref()?;
     let st = app.session.active()?;
     let layer = LayerId(picker.layer);

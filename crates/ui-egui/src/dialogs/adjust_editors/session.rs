@@ -82,6 +82,15 @@ pub fn properties_reset(ctx: &egui::Context, doc: u64, id: LayerId, adj: &Adjust
 /// The Properties-panel editor of an adjustment layer: previews live (`app.live_adjust`) while a
 /// control moves and commits one `layer.setAdjustment` per gesture.
 pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
+    if let Some(target) = crate::view_visibility::adjustments::Target::current(app, id) {
+        targeted_layer_editor(app, ui, target);
+        return;
+    }
+    crate::view_visibility::adjustments::select(app, None);
+    if crate::view_visibility::focused_window(app).is_some() {
+        ui.label("Independent parameter editing currently supports Posterize and Levels. Select Main View to edit other adjustment types.");
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let kind = photocraft_engine::commands::adjustment_kind(adj);
     match adj {
@@ -144,5 +153,70 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
             tone::keep_after_commit(app, id, rev);
         }
         app.live_adjust = None;
+    }
+}
+
+/// Same controls, with a captured identity for every value, preview and commit. The UI scope
+/// changes on a target switch/cancel, so a held pointer or text edit cannot migrate to a view.
+fn targeted_layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, target: crate::view_visibility::adjustments::Target) {
+    use crate::view_visibility::adjustments as views;
+    views::select(app, Some(target));
+    let Ok(value) = views::effective(app, target) else { return };
+    let mut values = adjust_params::to_params(&value);
+    let secondary = target.window.is_some();
+    let kind = target.kind();
+    let hist = needs_histogram(kind).then(|| match target.window {
+        Some(window) => crate::view_visibility::histograms::get(app, window, target.layer, space_of(&values)),
+        None => tone::histograms(app, HistSource::BelowLayer(target.layer), space_of(&values)),
+    });
+    ui.ctx().data_mut(|data| data.insert_temp(target.memory().with("disable-levels-auto"), secondary));
+    let cx = EditorCx {
+        mem: target.memory(),
+        hist,
+        gray: is_gray(target.mode()),
+        swatches: swatches(app),
+        gradients: Vec::new(),
+        dialog: false,
+        dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
+        isolated_curve: None,
+    };
+    let epoch = app.view_composites.editor.ui_epoch;
+    let edit = ui
+        .push_id((target.memory(), epoch), |ui| {
+            if let Some(window) = target.window {
+                ui.label(format!("Window {window}: display-only adjustment parameters"));
+            }
+            if kind == "levels" {
+                if secondary {
+                    ui.small("Input histogram uses this view's layer stack. Auto and eyedroppers remain unavailable for secondary views.");
+                    ui.add_enabled_ui(false, |ui| crate::layer_picker::controls(app, ui, target.layer));
+                } else {
+                    crate::layer_picker::controls(app, ui, target.layer);
+                }
+            }
+            editor(ui, kind, &mut values, &cx)
+        })
+        .inner;
+    let result = if edit.commit {
+        let revision = app.session.active().map(|s| s.revision);
+        let result = views::commit(app, target, &values, false);
+        if result.is_ok() && !secondary {
+            tone::keep_after_commit(app, target.layer, revision);
+        }
+        result
+    } else if edit.changed {
+        views::preview(app, target, &values)
+    } else {
+        Ok(())
+    };
+    if let Err(error) = result {
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
+    if edit.changed || edit.commit {
+        ui.ctx().request_repaint();
+        if let Some(window) = target.window {
+            ui.ctx().request_repaint_of(egui::ViewportId::from_hash_of(("docwin", window)));
+        }
     }
 }

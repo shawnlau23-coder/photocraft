@@ -9,25 +9,34 @@ use serde_json::{Value, json};
 
 use crate::{PhotocraftApp, canvas::CanvasCache};
 
+pub(crate) mod adjustments;
+pub(crate) mod histograms;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Visibility {
     document: Option<DocId>,
     layers: BTreeMap<LayerId, bool>,
     opacity: BTreeMap<LayerId, f32>,
     blend: BTreeMap<LayerId, BlendMode>,
+    adjustments: BTreeMap<LayerId, adjustments::Snapshot>,
+    adjustment_serial: u64,
     solo: Option<(LayerId, BTreeMap<LayerId, bool>)>,
 }
 
 impl Visibility {
     pub(crate) fn new(doc: &Document) -> Self {
         let layers = doc.walk();
-        Self {
+        let mut state = Self {
             document: Some(doc.id),
             layers: layers.iter().map(|(_, _, l)| (l.id, l.visible)).collect(),
             opacity: layers.iter().map(|(_, _, l)| (l.id, display_opacity(l.opacity))).collect(),
             blend: layers.iter().map(|(_, _, l)| (l.id, l.blend)).collect(),
+            adjustments: BTreeMap::new(),
+            adjustment_serial: 0,
             solo: None,
-        }
+        };
+        state.sync_adjustments(doc);
+        state
     }
 
     fn sync(&mut self, doc: &Document) {
@@ -39,6 +48,7 @@ impl Visibility {
         self.layers.retain(|id, _| live.contains_key(id));
         self.opacity.retain(|id, _| live.contains_key(id));
         self.blend.retain(|id, _| live.contains_key(id));
+        self.sync_adjustments(doc);
         for (_, _, layer) in doc.walk() {
             self.opacity.entry(layer.id).or_insert_with(|| display_opacity(layer.opacity));
             self.blend.entry(layer.id).or_insert(layer.blend);
@@ -63,6 +73,7 @@ struct Projection {
     visibility: BTreeMap<LayerId, bool>,
     opacity: BTreeMap<LayerId, f32>,
     blend: BTreeMap<LayerId, BlendMode>,
+    adjustments: BTreeMap<LayerId, Arc<photocraft_doc::Adjustment>>,
     shown: Arc<Document>,
     key: u64,
 }
@@ -70,6 +81,8 @@ struct Projection {
 /// Separate namespaces: native document identity is never replaced by a made-up document ID.
 #[derive(Default)]
 pub(crate) struct Composites {
+    pub histograms: HashMap<u64, histograms::Cache>,
+    pub editor: adjustments::EditorSession,
     pub rendering_window: Option<u64>,
     pub caches: HashMap<u64, Caches>,
     pub channels: HashMap<u64, HashMap<u64, crate::channel_view::Cache>>,
@@ -100,6 +113,16 @@ pub(crate) fn retain(app: &mut PhotocraftApp) {
     app.view_composites.caches.retain(|id, _| live.contains(id));
     app.view_composites.projections.retain(|id, _| live.contains(id));
     app.view_composites.channels.retain(|id, _| live.contains(id));
+    app.view_composites.histograms.retain(|id, cache| {
+        live.contains(id)
+            && app
+                .ui
+                .windows
+                .iter()
+                .find(|w| w.id == *id)
+                .and_then(|w| app.session.documents().get(w.document))
+                .is_some_and(|st| st.doc.id == cache.document() && st.doc.layer(cache.layer()).is_some())
+    });
     for id in live {
         initialize(app, id);
         if let Some(doc) = app.ui.windows.iter().find(|w| w.id == id).and_then(|w| w.visibility.document) {
@@ -114,6 +137,7 @@ pub(crate) fn retain(app: &mut PhotocraftApp) {
             }
         }
     }
+    adjustments::prune(app);
 }
 
 pub(crate) fn inspect(app: &PhotocraftApp) -> Value {
@@ -122,7 +146,8 @@ pub(crate) fn inspect(app: &PhotocraftApp) -> Value {
             .windows
             .iter()
             .filter(|w| w.open)
-            .map(|w| { json!({"window": w.id, "document": w.visibility.document, "layers": w.visibility.layers, "opacity": w.visibility.opacity, "blend": w.visibility.blend}) })
+            .map(|w| { json!({"window": w.id, "document": w.visibility.document, "layers": w.visibility.layers, "opacity": w.visibility.opacity, "blend": w.visibility.blend,
+                "adjustments": w.visibility.adjustments.iter().map(|(id, a)| (id.0.to_string(), photocraft_engine::adjust_params::to_params(&a.value))).collect::<BTreeMap<_, _>>()}) })
             .collect::<Vec<_>>()
     )
 }
@@ -134,6 +159,7 @@ pub(crate) fn project(app: &mut PhotocraftApp, window: u64, source: Arc<Document
 
 fn project_with_key(app: &mut PhotocraftApp, window: u64, source: Arc<Document>, source_key: u64) -> (Arc<Document>, u64) {
     initialize(app, window);
+    let adjustments = adjustments::effective_snapshots(app, window);
     let revision = app.session.documents().iter().find(|st| st.doc.id == source.id).map_or(0, |st| st.revision);
     let source_key = (revision, source_key);
     let Some(w) = app.ui.windows.iter().find(|w| w.id == window && w.open && w.visibility.document == Some(source.id)) else { return (source, 0) };
@@ -146,6 +172,8 @@ fn project_with_key(app: &mut PhotocraftApp, window: u64, source: Arc<Document>,
         && &p.visibility == visibility
         && &p.opacity == opacity
         && &p.blend == blend
+        && p.adjustments.len() == adjustments.len()
+        && p.adjustments.iter().all(|(id, value)| adjustments.get(id).is_some_and(|other| Arc::ptr_eq(value, other)))
     {
         return (p.shown.clone(), p.key);
     }
@@ -163,6 +191,9 @@ fn project_with_key(app: &mut PhotocraftApp, window: u64, source: Arc<Document>,
             if let Some(blend) = blend.get(&layer.id) {
                 target.blend = *blend;
             }
+            if let Some(adjustment) = adjustments.get(&layer.id) {
+                target.content = photocraft_doc::LayerContent::Adjustment((**adjustment).clone());
+            }
         }
     }
     let shown = Arc::new(shown);
@@ -176,6 +207,7 @@ fn project_with_key(app: &mut PhotocraftApp, window: u64, source: Arc<Document>,
             visibility: visibility.clone(),
             opacity: opacity.clone(),
             blend: blend.clone(),
+            adjustments,
             shown: shown.clone(),
             key,
         },
@@ -225,10 +257,13 @@ pub(crate) fn cache_mut(app: &mut PhotocraftApp, doc: DocId, output: Option<u32>
 }
 
 pub(crate) fn handles(id: &str) -> bool {
-    matches!(id, "view.layerVisibility" | "view.layerVisibility.showOnly" | "view.layerOpacity" | "view.layerBlend")
+    matches!(id, "view.layerVisibility" | "view.layerVisibility.showOnly" | "view.layerOpacity" | "view.layerBlend" | "view.layerAdjustment")
 }
 
 pub(crate) fn command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
+    if id == "view.layerAdjustment" {
+        return adjustments::command(app, ctx, p);
+    }
     let window = match p.get("window") {
         Some(value) => value.as_u64().ok_or("window must be a secondary window ID")?,
         None => focused_window(app).ok_or("select a secondary document window")?,

@@ -84,6 +84,12 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &photocraft_doc::Adjustment) {
+    use crate::view_visibility::adjustments;
+    let target = adjustments::Target::current(app, id);
+    let window = crate::view_visibility::focused_window(app);
+    if window.is_some() {
+        ui.small("Clipping and mask pixel edits still affect the shared document.");
+    }
     // Keep the scope reachable before tall editors and within a compact dock (#5231).
     // Adjustment layers affect the stack by default; clipping limits them to their base.
     if let Some(mut clip) = app.session.active().and_then(|s| s.doc.layer(id).map(|l| l.clipped))
@@ -94,13 +100,35 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
     ui.add_space(6.0);
     crate::adjust_editors::layer_editor(app, ui, id, adj);
     ui.add_space(6.0);
-    if let Some(mut vis) = app.session.active().and_then(|s| s.doc.layer(id).map(|l| l.visible))
+    let visibility = app.session.active().map(|s| s.doc.clone()).and_then(|doc| {
+        let doc = window.map_or_else(|| doc.clone(), |w| crate::view_visibility::project(app, w, doc.clone()).0);
+        doc.layer(id).map(|l| l.visible)
+    });
+    if let Some(mut vis) = visibility
         && widgets::toggle(ui, &mut vis, tl!("Adjustment visible")).changed()
     {
-        let _ = app.run("layer.setProps", json!({"layer": id.0, "visible": vis}));
+        let params = json!({"layer": id.0, "visible": vis});
+        if !crate::view_visibility::panel_action(app, ui.ctx(), window, "layer.setProps", &params) {
+            let _ = app.run("layer.setProps", params);
+        }
     }
     ui.add_space(6.0);
-    if widgets::secondary_button(ui, tl!("Reset to defaults"), ui.available_width()).clicked() {
+    if ui
+        .add_enabled_ui(window.is_none() || target.is_some(), |ui| widgets::secondary_button(ui, tl!("Reset to defaults"), ui.available_width()).clicked())
+        .inner
+    {
+        if let Some(target) = target {
+            adjustments::abort(app);
+            if let Err(error) = adjustments::commit(app, target, &json!({}), true) {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+            ui.ctx().request_repaint();
+            if let Some(w) = window {
+                ui.ctx().request_repaint_of(egui::ViewportId::from_hash_of(("docwin", w)));
+            }
+            return;
+        }
         let doc = app.session.active().map_or(0, |s| s.doc.id.0);
         // Photoshop's two-step Reset where measured (Color Balance), else the defaults.
         let params = crate::adjust_editors::properties_reset(ui.ctx(), doc, id, adj).unwrap_or_else(|| json!({"layer": id.0}));
