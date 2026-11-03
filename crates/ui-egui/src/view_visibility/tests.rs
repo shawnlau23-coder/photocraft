@@ -4,6 +4,7 @@ use crate::{Services, menus};
 mod adjustment_tests;
 mod blend_tests;
 mod opacity_tests;
+mod phase4b_tests;
 
 fn fixture() -> (PhotocraftApp, egui::Context, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());

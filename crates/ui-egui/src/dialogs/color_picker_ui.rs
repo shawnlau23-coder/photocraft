@@ -298,6 +298,10 @@ pub fn top(app: &PhotocraftApp) -> Option<u64> {
 /// point (x, y). Off the image or over transparency nothing changes.
 pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) {
     let Some(id) = top(app) else { return };
+    if app.ui.dialogs.iter().any(|d| d.id == id && d.fields.get("__adjustmentSecondary").and_then(Value::as_bool) == Some(true)) {
+        app.ui.status = "Canvas sampling is unavailable for independent adjustment color pickers; use the picker controls.".into();
+        return;
+    }
     let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return };
     if let Some(d) = app.ui.dialog_mut(id) {
         set_rgb(&mut d.fields, rgb, Keep::Nothing);
@@ -438,6 +442,9 @@ const VALUE_W: f32 = 42.0;
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
     ui.set_width(content_width(ui));
     ui.spacing_mut().item_spacing.y = 4.0;
+    if f.get("__adjustmentSecondary").and_then(Value::as_bool) == Some(true) {
+        ui.small("Independent adjustment color. Canvas eyedropper sampling is unavailable; use the picker controls.");
+    }
     let mut outcome = None;
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
@@ -788,6 +795,43 @@ struct WidgetRequest {
     widget: u64,
     title: String,
     rgb: [f32; 3],
+    owner: Option<(crate::view_visibility::adjustments::Target, u64)>,
+}
+
+fn widget_owner() -> egui::Id {
+    egui::Id::unique("adjustment-widget-owner")
+}
+
+/// Attribute requests made by the existing graphical swatches to one immutable editor session.
+pub(crate) fn with_widget_owner<R>(ctx: &egui::Context, target: crate::view_visibility::adjustments::Target, epoch: u64, f: impl FnOnce() -> R) -> R {
+    let previous = ctx.data(|d| d.get_temp::<(crate::view_visibility::adjustments::Target, u64)>(widget_owner()));
+    ctx.data_mut(|d| d.insert_temp(widget_owner(), (target, epoch)));
+    let result = f();
+    ctx.data_mut(|d| {
+        d.remove::<(crate::view_visibility::adjustments::Target, u64)>(widget_owner());
+        if let Some(owner) = previous {
+            d.insert_temp(widget_owner(), owner);
+        }
+    });
+    result
+}
+
+fn adjustment_owner_valid(app: &PhotocraftApp, f: &Map<String, Value>) -> bool {
+    let Some(owner) = f.get("__adjustmentOwner") else { return true };
+    app.view_composites.editor.target.is_some_and(|target| {
+        owner == &json!([target.memory().value(), app.view_composites.editor.ui_epoch])
+            && crate::view_visibility::adjustments::accepts_completion(app, target, app.view_composites.editor.ui_epoch)
+    })
+}
+
+pub(crate) fn adjustment_picker_open(app: &PhotocraftApp) -> bool {
+    app.ui.dialogs.iter().any(|d| d.fields.contains_key("__adjustmentOwner"))
+}
+
+pub(crate) fn cancel_adjustment_picker(app: &mut PhotocraftApp, fields: &Map<String, Value>) {
+    if fields.contains_key("__adjustmentOwner") && adjustment_owner_valid(app, fields) {
+        crate::view_visibility::adjustments::abort(app);
+    }
 }
 
 fn widget_requests() -> egui::Id {
@@ -822,7 +866,8 @@ pub enum WidgetEvent {
 pub fn request_for_widget(ctx: &egui::Context, widget: egui::Id, title: &str, rgb: [f32; 3]) {
     let rgb = rgb.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 });
     ctx.data_mut(|d| {
-        d.get_temp_mut_or_default::<Vec<WidgetRequest>>(widget_requests()).push(WidgetRequest { widget: widget.value(), title: title.to_string(), rgb })
+        let owner = d.get_temp::<(crate::view_visibility::adjustments::Target, u64)>(widget_owner());
+        d.get_temp_mut_or_default::<Vec<WidgetRequest>>(widget_requests()).push(WidgetRequest { widget: widget.value(), title: title.to_string(), rgb, owner })
     });
     ctx.request_repaint();
 }
@@ -857,6 +902,8 @@ pub fn widget_picker_open(ctx: &egui::Context, widget: egui::Id) -> bool {
 /// a swatch whose picker closed without a new colour to restore its own, and open the Color
 /// Picker a swatch asked for.
 pub fn widget_tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let stale: Vec<_> = app.ui.dialogs.iter().filter(|d| !adjustment_owner_valid(app, &d.fields)).map(|d| d.id).collect();
+    app.ui.dialogs.retain(|d| !stale.contains(&d.id));
     let done = std::mem::take(&mut app.widget_colors);
     let mut events: Vec<(u64, WidgetEvent)> = Vec::new();
     let mut open_now: Vec<u64> = Vec::new();
@@ -916,7 +963,14 @@ pub fn widget_tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     });
     // One picker per click; a second click before it opened asks for the same thing.
     if let Some(r) = requests.and_then(|r| r.into_iter().last()) {
+        if r.owner.is_some_and(|(target, epoch)| !crate::view_visibility::adjustments::accepts_completion(app, target, epoch)) {
+            return;
+        }
         let mut f = fields_with_web(app, "widget", &r.title, r.rgb);
+        if let Some((target, epoch)) = r.owner {
+            f.insert("__adjustmentOwner".into(), json!([target.memory().value(), epoch]));
+            f.insert("__adjustmentSecondary".into(), json!(target.window.is_some()));
+        }
         f.insert("__widget".into(), json!(r.widget));
         app.ui.open_dialog(DialogKind::Command, f);
     }
@@ -934,6 +988,9 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 
 /// OK: set the foreground or background colour, or whatever else the picker was opened for.
 fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    if !adjustment_owner_valid(app, f) {
+        return Err("the adjustment color picker's target changed".into());
+    }
     if crate::type_panels_ui::color_picker::owns(f) {
         return crate::type_panels_ui::color_picker::confirm(app, f);
     }

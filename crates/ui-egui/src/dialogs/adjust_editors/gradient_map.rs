@@ -59,6 +59,10 @@ struct MapStopDrag {
     changed: bool,
 }
 
+pub(super) fn cancel_gesture(ctx: &egui::Context, mem: egui::Id) {
+    ctx.data_mut(|d| d.remove::<MapStopDrag>(mem.with("gm-stop-drag")));
+}
+
 /// Keep selection on the same stop when it crosses another stop (including coincident stops).
 fn move_map_stop(stops: &mut [Stop], index: usize, location: f32) -> Option<usize> {
     let stop = stops.get_mut(index)?;

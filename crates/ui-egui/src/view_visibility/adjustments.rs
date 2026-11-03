@@ -38,7 +38,7 @@ pub(crate) struct Target {
 }
 
 pub(crate) fn supported(value: &Adjustment) -> bool {
-    matches!(value, Adjustment::Posterize { .. } | Adjustment::Levels { .. })
+    !matches!(value, Adjustment::Unsupported { .. })
 }
 
 impl Target {
@@ -54,7 +54,7 @@ impl Target {
         let doc = app.session.documents().get(idx).ok_or("document is closed")?.doc.clone();
         let value = match doc.layer(layer).map(|l| &l.content) {
             Some(LayerContent::Adjustment(value)) if supported(value) => value,
-            _ => return Err("Phase 4A supports Posterize and Levels only".into()),
+            _ => return Err("this adjustment type is not supported".into()),
         };
         let epoch = match window {
             Some(id) => {
@@ -112,6 +112,8 @@ pub(crate) struct EditorSession {
     pub target: Option<Target>,
     draft: Option<Arc<Adjustment>>,
     pub ui_epoch: u64,
+    reset_start: Option<Arc<Adjustment>>,
+    edited: bool,
 }
 
 pub(crate) fn cancel(app: &mut PhotocraftApp) {
@@ -123,6 +125,10 @@ pub(crate) fn cancel(app: &mut PhotocraftApp) {
 
 pub(crate) fn abort(app: &mut PhotocraftApp) {
     cancel(app);
+    let widgets: Vec<_> =
+        app.ui.dialogs.iter().filter(|d| d.fields.contains_key("__adjustmentOwner")).filter_map(|d| d.fields.get("__widget").and_then(Value::as_u64)).collect();
+    app.ui.dialogs.retain(|d| !d.fields.contains_key("__adjustmentOwner"));
+    app.widget_colors.retain(|(id, _)| !widgets.contains(id));
     app.view_composites.editor.ui_epoch = app.view_composites.editor.ui_epoch.wrapping_add(1);
 }
 
@@ -130,8 +136,21 @@ pub(crate) fn select(app: &mut PhotocraftApp, target: Option<Target>) {
     if app.view_composites.editor.target != target {
         abort(app);
         app.view_composites.editor.target = target;
+        app.view_composites.editor.reset_start = target.and_then(|t| committed(app, t).ok());
+        app.view_composites.editor.edited = false;
         app.ui.layer_picker = None;
     }
+}
+
+/// Async pickers never refocus a document or redirect their result to the current view.
+pub(crate) fn accepts_completion(app: &PhotocraftApp, target: Target, epoch: u64) -> bool {
+    app.view_composites.editor.target == Some(target)
+        && app.view_composites.editor.ui_epoch == epoch
+        && target.validate(app).is_ok()
+        && focused_window(app) == target.window
+        && app.session.active().is_some_and(|st| st.doc.id == target.document && st.active_layer == Some(target.layer))
+        && !app.ui.vector_mask_target
+        && (!app.ui.mask_target || app.ui.properties_layer == Some(target.layer.0))
 }
 
 pub(crate) fn prune(app: &mut PhotocraftApp) {
@@ -219,13 +238,21 @@ pub(crate) fn preview(app: &mut PhotocraftApp, target: Target, params: &Value) -
     Ok(())
 }
 
+pub(crate) fn reset_restores_session(app: &PhotocraftApp, target: Target) -> bool {
+    target.kind == "colorBalance" && app.view_composites.editor.target == Some(target) && app.view_composites.editor.edited
+}
+
 pub(crate) fn commit(app: &mut PhotocraftApp, target: Target, params: &Value, reset: bool) -> Result<(), String> {
     target.validate(app)?;
     let base = effective(app, target)?;
     let value = if !reset && params == &adjust_params::to_params(&base) {
         Ok((*base).clone())
     } else if reset {
-        adjust_params::default_for(target.kind, target.mode)
+        if reset_restores_session(app, target) {
+            app.view_composites.editor.reset_start.as_ref().map_or_else(|| adjust_params::default_for(target.kind, target.mode), |v| Ok((**v).clone()))
+        } else {
+            adjust_params::default_for(target.kind, target.mode)
+        }
     } else {
         adjust_params::from_params(target.kind, params, Some(&base), target.mode)
     }
@@ -236,13 +263,19 @@ pub(crate) fn commit(app: &mut PhotocraftApp, target: Target, params: &Value, re
             let snapshot =
                 app.ui.windows.iter_mut().find(|w| w.id == id).and_then(|w| w.visibility.adjustments.get_mut(&target.layer)).ok_or("adjustment unavailable")?;
             snapshot.value = if value == *base { base.clone() } else { Arc::new(value) };
+            if app.view_composites.editor.target == Some(target) {
+                app.view_composites.editor.edited = !reset;
+            }
         } else {
-            let mut params = adjust_params::to_params(&value);
+            let mut params = if !reset && target.kind == "colorLookup" { params.clone() } else { adjust_params::to_params(&value) };
             params["layer"] = json!(target.layer.0);
             app.run("layer.setAdjustment", params)?;
         }
     }
     if app.view_composites.editor.target == Some(target) {
+        if reset {
+            app.view_composites.editor.edited = false;
+        }
         cancel(app);
     }
     Ok(())

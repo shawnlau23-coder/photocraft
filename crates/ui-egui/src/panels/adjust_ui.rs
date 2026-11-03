@@ -1,8 +1,8 @@
 //! Properties-panel editors for the Selective Color and Color Lookup adjustment layers.
 //!
-//! Both commit through `layer.setAdjustment` (which merges these kinds' params into the current
-//! values). Selective Color previews live while a slider drags, via `app.live_adjust` carrying
-//! the full parameter set; Color Lookup commits on every change (its table isn't in the params).
+//! Main commits through `layer.setAdjustment` and previews through `app.live_adjust`.
+//! Secondary targets use the same typed snapshot/session routing as the other adjustment
+//! editors. Color Lookup keeps its shared LUT payload when merging partial parameter updates.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -12,7 +12,26 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
+use crate::view_visibility::adjustments as views;
 use crate::widgets;
+
+fn secondary_target(app: &mut PhotocraftApp, id: LayerId) -> Option<views::Target> {
+    views::Target::current(app, id).filter(|target| target.window.is_some())
+}
+
+fn show_error(app: &mut PhotocraftApp, result: Result<(), String>) {
+    if let Err(error) = result {
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
+}
+
+fn repaint_target(ctx: &egui::Context, target: views::Target) {
+    ctx.request_repaint();
+    if let Some(window) = target.window {
+        ctx.request_repaint_of(egui::ViewportId::from_hash_of(("docwin", window)));
+    }
+}
 
 const RANGE_LABELS: [&str; 9] = ["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas", "Whites", "Neutrals", "Blacks"];
 
@@ -29,14 +48,15 @@ pub fn selective_values(adj: &Adjustment) -> Value {
 }
 
 pub fn selective_color_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
+    let target = secondary_target(app, id);
     let t = Tokens::get(ui.ctx());
     let committed = selective_values(adj);
     let mut values = match &app.live_adjust {
-        Some((l, v)) if *l == id && v.get("reds").is_some() => v.clone(),
+        Some((l, v)) if target.is_none() && *l == id && v.get("reds").is_some() => v.clone(),
         _ => committed,
     };
-    let key = egui::Id::unique(("selc-range", id.0));
-    let mut range: usize = ui.data(|d| d.get_temp(key)).unwrap_or(0);
+    let key = target.map_or_else(|| egui::Id::unique(("selc-range", id.0)), |t| t.memory().with("selc-range"));
+    let mut range: usize = ui.data(|d| d.get_temp(key)).unwrap_or(0).min(RANGES.len().saturating_sub(1));
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Colors")).color(t.text_dim));
         let opts: Vec<(usize, &str)> = RANGE_LABELS.iter().copied().enumerate().collect();
@@ -70,9 +90,21 @@ pub fn selective_color_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: La
         }
     });
     if live {
-        app.live_adjust = Some((id, values.clone()));
+        if let Some(target) = target {
+            let result = views::preview(app, target, &values);
+            show_error(app, result);
+            repaint_target(ui.ctx(), target);
+        } else {
+            app.live_adjust = Some((id, values.clone()));
+        }
     }
     if commit {
+        if let Some(target) = target {
+            let result = views::commit(app, target, &values, false);
+            show_error(app, result);
+            repaint_target(ui.ctx(), target);
+            return;
+        }
         let mut p = values;
         p["layer"] = json!(id.0);
         let _ = app.run("layer.setAdjustment", p);
@@ -82,11 +114,33 @@ pub fn selective_color_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: La
 
 /// Ask the platform for one LUT. Send embedded text through the same engine command on
 /// desktop and web, so the result doesn't depend on ambient filesystem permissions.
+#[cfg(test)]
 fn browse_color_lookup(app: &mut PhotocraftApp, layer: LayerId) -> Result<Value, String> {
+    browse_color_lookup_with_context(app, layer, None)
+}
+
+fn browse_color_lookup_with_context(app: &mut PhotocraftApp, layer: LayerId, ctx: Option<egui::Context>) -> Result<Value, String> {
     let doc = app.active_doc_id()?;
+    let target = views::Target::current(app, layer);
+    if let Some(target) = target {
+        views::select(app, Some(target));
+    }
+    let epoch = app.view_composites.editor.ui_epoch;
     app.pick_file_bytes_filtered(&["cube", "3dl", "look"], move |app, file_name, bytes| {
         // Reject invalid UTF-8 instead of silently changing the LUT before parsing.
         let data = String::from_utf8(bytes).map_err(|_| format!("{file_name}: LUT must contain UTF-8 text"))?;
+        if let Some(target) = target {
+            if !views::accepts_completion(app, target, epoch) {
+                return Err("the LUT picker's adjustment target changed; file was not applied".into());
+            }
+            if target.window.is_some() {
+                views::commit(app, target, &json!({"fileName": file_name, "data": data}), false)?;
+                if let Some(ctx) = &ctx {
+                    repaint_target(ctx, target);
+                }
+                return Ok(json!({"window": target.window, "layer": layer.0}));
+            }
+        }
         app.refocus(doc)?;
         app.run("layer.setAdjustment", json!({"layer": layer.0, "fileName": file_name, "data": data}))
     })
@@ -173,6 +227,7 @@ fn lookup_params(key: &str) -> Value {
 }
 
 pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
+    let target = secondary_target(app, id);
     let t = Tokens::get(ui.ctx());
     let Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, .. } = adj else {
         return;
@@ -183,7 +238,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let current = app
         .live_adjust
         .as_ref()
-        .filter(|(layer, params)| *layer == id && params.get("lut").is_some())
+        .filter(|(layer, params)| target.is_none() && *layer == id && params.get("lut").is_some())
         .and_then(|(_, params)| params.get("lut").and_then(Value::as_str))
         .map(str::to_owned)
         .unwrap_or(current);
@@ -197,7 +252,8 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let mut sel = current.clone();
     let mut params: Option<Value> = None;
     let mut browse = false;
-    let cycle_key = egui::Id::unique(("color-lookup-cycle", id.0));
+    let cycle_key =
+        target.map_or_else(|| egui::Id::unique(("color-lookup-cycle", id.0)), |t| t.memory().with(("lookup-cycle", app.view_composites.editor.ui_epoch)));
     let cycle_input = ui.input(|input| {
         input.raw.events.iter().any(|event| {
             matches!(event, egui::Event::MouseWheel { .. })
@@ -213,7 +269,12 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
                 // ponytail: wheel previews cover the built-ins only; a folder LUT would be re-read
                 // from disk on every step. Pick it with a click.
                 if sel != "load" && sel != "custom" && !sel.starts_with(FOLDER_LUT) {
-                    app.live_adjust = Some((id, json!({"lut": sel})));
+                    if let Some(target) = target {
+                        let result = views::preview(app, target, &json!({"lut": sel}));
+                        show_error(app, result);
+                    } else {
+                        app.live_adjust = Some((id, json!({"lut": sel})));
+                    }
                     cycling_preview = true;
                 }
             } else if sel == "load" {
@@ -224,12 +285,21 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         }
     });
     if cycling_preview {
+        if let Some(target) = target {
+            repaint_target(ui.ctx(), target);
+        }
         let now = ui.input(|input| input.time);
         ui.ctx().data_mut(|data| data.insert_temp(cycle_key, now));
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     } else if let Some(since) = ui.ctx().data(|data| data.get_temp::<f64>(cycle_key)) {
         if ui.input(|input| input.time - since) >= 0.75 {
-            if let Some((layer, preview)) = &app.live_adjust
+            if let Some(target) = target {
+                let result = views::commit(app, target, &json!({}), false);
+                show_error(app, result);
+                repaint_target(ui.ctx(), target);
+            }
+            if target.is_none()
+                && let Some((layer, preview)) = &app.live_adjust
                 && *layer == id
                 && preview.get("lut").is_some()
             {
@@ -240,8 +310,13 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
+    if browse && let Some(target) = target {
+        views::abort(app);
+        ui.ctx().data_mut(|data| data.remove::<f64>(cycle_key));
+        repaint_target(ui.ctx(), target);
+    }
     if browse
-        && let Err(e) = browse_color_lookup(app, id)
+        && let Err(e) = browse_color_lookup_with_context(app, id, Some(ui.ctx().clone()))
         && e != crate::file_dialog::CANCELLED
     {
         app.ui.status = e;
@@ -262,6 +337,13 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         params = Some(json!({"dither": d}));
     }
     if let Some(mut p) = params {
+        if let Some(target) = target {
+            let result = views::commit(app, target, &p, false);
+            show_error(app, result);
+            ui.ctx().data_mut(|data| data.remove::<f64>(cycle_key));
+            repaint_target(ui.ctx(), target);
+            return;
+        }
         if p.get("lut").is_none()
             && let Some((layer, preview)) = &app.live_adjust
             && *layer == id
@@ -284,6 +366,64 @@ mod lookup_picker_tests {
     use serde_json::json;
 
     const CUBE: &str = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+
+    #[test]
+    fn phase4b_lut_callbacks_respect_view_lifetime_and_session_generation() {
+        for scenario in ["accept", "switch", "return", "close", "replace"] {
+            let (dialog, _) = file_dialog::fake(vec![Some(FileDialogAnswer::Contents("private.cube".into(), CUBE.as_bytes().to_vec()))]);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(dialog), ..Default::default() });
+            app.run("file.new", json!({"width": 8,"height": 8})).unwrap();
+            let layer = LayerId(app.run("layer.newAdjustmentLayer.colorLookup", json!({})).unwrap()["layer"].as_u64().unwrap());
+            let ctx = egui::Context::default();
+            let a = crate::menus::invoke(&mut app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+            let b = crate::menus::invoke(&mut app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+            app.ui.focused_window = Some(a);
+            let before = app.session.active().unwrap().clone();
+            browse_color_lookup(&mut app, layer).unwrap();
+            match scenario {
+                "switch" => app.ui.focused_window = Some(b),
+                "return" => {
+                    app.ui.focused_window = Some(b);
+                    views::follow(&mut app, &ctx);
+                    app.ui.focused_window = Some(a);
+                    let t = views::Target::current(&mut app, layer).unwrap();
+                    views::select(&mut app, Some(t));
+                }
+                "close" => app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().open = false,
+                "replace" => {
+                    app.session
+                        .edit("replace", |doc, _| {
+                            doc.layer_mut(layer).unwrap().content = photocraft_doc::LayerContent::Adjustment(Adjustment::Invert);
+                            Ok(())
+                        })
+                        .unwrap();
+                }
+                _ => {}
+            }
+            app.poll_file_dialog(&ctx, None);
+            app.poll_file_dialog(&ctx, None);
+            if scenario == "accept" {
+                let doc = app.session.active().unwrap().doc.clone();
+                let projected = crate::view_visibility::project(&mut app, a, doc).0;
+                assert!(
+                    matches!(&projected.layer(layer).unwrap().content,photocraft_doc::LayerContent::Adjustment(Adjustment::ColorLookup { name,lut:Some(_), .. }) if name=="private.cube")
+                );
+                assert!(!app.ui.status_error);
+            } else {
+                assert!(app.ui.status_error, "{scenario}");
+            }
+            if scenario != "replace" {
+                assert!(Arc::ptr_eq(&before.doc, &app.session.active().unwrap().doc));
+                assert_eq!(before.history.past_len(), app.session.active().unwrap().history.past_len());
+            }
+            assert!(app.live_adjust.is_none());
+            let doc = app.session.active().unwrap().doc.clone();
+            let other = crate::view_visibility::project(&mut app, b, doc).0;
+            if scenario != "replace" {
+                assert!(matches!(&other.layer(layer).unwrap().content, photocraft_doc::LayerContent::Adjustment(Adjustment::ColorLookup { lut: None, .. })));
+            }
+        }
+    }
 
     #[test]
     fn chosen_lut_is_embedded_into_the_requested_adjustment_layer() {

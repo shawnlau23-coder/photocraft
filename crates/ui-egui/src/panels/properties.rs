@@ -85,7 +85,8 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &photocraft_doc::Adjustment) {
     use crate::view_visibility::adjustments;
-    let target = adjustments::Target::current(app, id);
+    let target = adjustments::Target::current(app, id)
+        .filter(|t| t.window.is_some() || matches!(adj, photocraft_doc::Adjustment::Posterize { .. } | photocraft_doc::Adjustment::Levels { .. }));
     let window = crate::view_visibility::focused_window(app);
     if window.is_some() {
         ui.small("Clipping and mask pixel edits still affect the shared document.");
@@ -118,6 +119,9 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
         .inner
     {
         if let Some(target) = target {
+            if !adjustments::reset_restores_session(app, target) {
+                crate::adjust_editors::reset_adjustment_editor(ui.ctx(), target.kind(), target.memory(), &mut json!({}));
+            }
             adjustments::abort(app);
             if let Err(error) = adjustments::commit(app, target, &json!({}), true) {
                 app.ui.status = error;

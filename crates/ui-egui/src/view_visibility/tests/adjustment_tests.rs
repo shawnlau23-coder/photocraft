@@ -79,7 +79,7 @@ fn secondary_histogram_excludes_upper_layers_and_refreshes_after_shared_pixels()
     }
 }
 
-fn fixture_adjustment(kind: &str) -> (PhotocraftApp, egui::Context, LayerId) {
+pub(super) fn fixture_adjustment(kind: &str) -> (PhotocraftApp, egui::Context, LayerId) {
     let (mut app, ctx, _, _) = fixture();
     app.run("edit.fill", json!({"color": "#3975ad"})).unwrap();
     app.run(&format!("layer.newAdjustmentLayer.{kind}"), json!({})).unwrap();
@@ -90,11 +90,11 @@ fn fixture_adjustment(kind: &str) -> (PhotocraftApp, egui::Context, LayerId) {
     (app, ctx, layer)
 }
 
-fn change(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, layer: LayerId, action: &str, params: Value) -> Value {
+pub(super) fn change(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, layer: LayerId, action: &str, params: Value) -> Value {
     menus::invoke(app, ctx, "view.layerAdjustment", json!({"window": window, "layer": layer.0, "action": action, "params": params})).unwrap()
 }
 
-fn value(app: &mut PhotocraftApp, window: u64, layer: LayerId) -> Adjustment {
+pub(super) fn value(app: &mut PhotocraftApp, window: u64, layer: LayerId) -> Adjustment {
     match &shown(app, window).layer(layer).unwrap().content {
         LayerContent::Adjustment(value) => value.clone(),
         _ => panic!("not an adjustment"),

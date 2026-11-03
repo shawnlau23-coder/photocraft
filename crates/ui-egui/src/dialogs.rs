@@ -1053,6 +1053,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    crate::color_picker_ui::cancel_adjustment_picker(app, &closed.fields);
     crate::actions::stopped(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));

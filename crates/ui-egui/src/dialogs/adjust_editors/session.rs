@@ -83,12 +83,26 @@ pub fn properties_reset(ctx: &egui::Context, doc: u64, id: LayerId, adj: &Adjust
 /// control moves and commits one `layer.setAdjustment` per gesture.
 pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
     if let Some(target) = crate::view_visibility::adjustments::Target::current(app, id) {
-        targeted_layer_editor(app, ui, target);
+        if target.window.is_some() || matches!(adj, Adjustment::Posterize { .. } | Adjustment::Levels { .. }) {
+            targeted_layer_editor(app, ui, target);
+        } else {
+            crate::view_visibility::adjustments::select(app, Some(target));
+            let epoch = app.view_composites.editor.ui_epoch;
+            let ctx = ui.ctx().clone();
+            prepare_gestures(&ctx, layer_mem(id), epoch);
+            crate::color_picker_ui::with_widget_owner(&ctx, target, epoch, || {
+                ui.push_id((target.memory(), epoch), |ui| canonical_layer_editor(app, ui, id, adj));
+            });
+        }
         return;
     }
     crate::view_visibility::adjustments::select(app, None);
+    canonical_layer_editor(app, ui, id, adj);
+}
+
+fn canonical_layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
     if crate::view_visibility::focused_window(app).is_some() {
-        ui.label("Independent parameter editing currently supports Posterize and Levels. Select Main View to edit other adjustment types.");
+        ui.label("This imported adjustment has no supported parameter editor.");
         return;
     }
     let t = Tokens::get(ui.ctx());
@@ -158,6 +172,19 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
 
 /// Same controls, with a captured identity for every value, preview and commit. The UI scope
 /// changes on a target switch/cancel, so a held pointer or text edit cannot migrate to a view.
+fn prepare_gestures(ctx: &egui::Context, memory: egui::Id, epoch: u64) {
+    if ctx.data(|d| d.get_temp::<u64>(memory.with("gesture-epoch"))) != Some(epoch) {
+        ctx.data_mut(|d| {
+            d.insert_temp(memory.with("gesture-epoch"), epoch);
+            d.remove::<crate::state::CurvesEditorState>(memory.with("curves"));
+            d.remove::<(bool, Option<[f32; 2]>)>(memory.with("curves-pencil"));
+            d.remove::<Option<u8>>(memory.with("levels-drag"));
+            d.remove::<Option<u8>>(memory.with("hs-range-drag"));
+        });
+        super::gradient_map::cancel_gesture(ctx, memory);
+    }
+}
+
 fn targeted_layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, target: crate::view_visibility::adjustments::Target) {
     use crate::view_visibility::adjustments as views;
     views::select(app, Some(target));
@@ -165,6 +192,23 @@ fn targeted_layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, target: cra
     let mut values = adjust_params::to_params(&value);
     let secondary = target.window.is_some();
     let kind = target.kind();
+    let epoch = app.view_composites.editor.ui_epoch;
+    let memory = target.memory();
+    prepare_gestures(ui.ctx(), memory, epoch);
+    if kind == "invert" {
+        ui.label(tl!("Invert has no settings."));
+        return;
+    }
+    if matches!(kind, "selectiveColor" | "colorLookup") {
+        ui.push_id((memory, epoch), |ui| {
+            if kind == "selectiveColor" {
+                crate::adjust_ui::selective_color_editor(app, ui, target.layer, &value);
+            } else {
+                crate::adjust_ui::color_lookup_editor(app, ui, target.layer, &value);
+            }
+        });
+        return;
+    }
     let hist = needs_histogram(kind).then(|| match target.window {
         Some(window) => crate::view_visibility::histograms::get(app, window, target.layer, space_of(&values)),
         None => tone::histograms(app, HistSource::BelowLayer(target.layer), space_of(&values)),
@@ -175,20 +219,20 @@ fn targeted_layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, target: cra
         hist,
         gray: is_gray(target.mode()),
         swatches: swatches(app),
-        gradients: Vec::new(),
+        gradients: gradient_presets(app, kind),
         dialog: false,
         dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
         isolated_curve: None,
     };
-    let epoch = app.view_composites.editor.ui_epoch;
-    let edit = ui
-        .push_id((target.memory(), epoch), |ui| {
+    let ctx = ui.ctx().clone();
+    let edit = crate::color_picker_ui::with_widget_owner(&ctx, target, epoch, || {
+        ui.push_id((target.memory(), epoch), |ui| {
             if let Some(window) = target.window {
                 ui.label(format!("Window {window}: display-only adjustment parameters"));
             }
-            if kind == "levels" {
+            if matches!(kind, "levels" | "curves") {
                 if secondary {
-                    ui.small("Input histogram uses this view's layer stack. Auto and eyedroppers remain unavailable for secondary views.");
+                    ui.small("Input histogram uses this view's layer stack. Eyedroppers remain unavailable for secondary views.");
                     ui.add_enabled_ui(false, |ui| crate::layer_picker::controls(app, ui, target.layer));
                 } else {
                     crate::layer_picker::controls(app, ui, target.layer);
@@ -196,8 +240,14 @@ fn targeted_layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, target: cra
             }
             editor(ui, kind, &mut values, &cx)
         })
-        .inner;
-    let result = if edit.commit {
+        .inner
+    });
+    if edit.import_gradients {
+        crate::preset_files_ui::import_gradients_dialog(app);
+    }
+    // The picker is a transaction: no widget close/drag event can commit its preview while
+    // its owning dialog is still open. Cancel aborts the session; OK hands back one final color.
+    let result = if edit.commit && !crate::color_picker_ui::adjustment_picker_open(app) {
         let revision = app.session.active().map(|s| s.revision);
         let result = views::commit(app, target, &values, false);
         if result.is_ok() && !secondary {
