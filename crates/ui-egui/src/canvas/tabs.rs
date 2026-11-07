@@ -737,7 +737,6 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some([x, y]) = w.position {
             builder = builder.with_position([x, y]);
         }
-        let mut view = w.view.clone();
         let mut close = false;
         let mut focused = false;
         ctx.show_viewport_immediate(vid, builder, |ui, class| {
@@ -749,24 +748,34 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 app.ui.focused_window = Some(w.id);
                 app.session.set_active(w.document);
             }
+            egui::Panel::top(egui::Id::unique(("independent-flip", w.id))).resizable(false).show(ui, |ui| {
+                let mut independent = !w.follow_main_flip;
+                if ui.checkbox(&mut independent, tl!("Independent Flip"))
+                    .on_hover_text(tl!("When off, this window follows the Main View and its flip shortcut is disabled."))
+                    .changed()
+                    && let Some(win) = app.ui.windows.iter_mut().find(|win| win.id == w.id)
+                {
+                    win.follow_main_flip = !independent;
+                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                }
+            });
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 app.with_document_window(w.id, |app| {
                     app.last_canvas_rect = rect;
                     app.ppp = ui.ctx().pixels_per_point();
                     if focused && class == egui::ViewportClass::Immediate {
-                        crate::shortcuts::document_window_zoom_keys(app, ui.ctx());
+                        crate::shortcuts::document_window_view_keys(app, ui.ctx());
                     }
                     let camera = app.ui.views[w.document].clone();
-                    view = canvas_view(app, ui, w.document, rect, camera, focused);
+                    let mut view = canvas_view(app, ui, w.document, rect, camera, focused);
                     // Zoom Resizes Windows keeps this window's camera local too.
                     crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
-                    app.ui.views[w.document] = view.clone();
+                    app.ui.views[w.document] = view;
                 });
             });
         });
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
-            win.view = view;
             win.focused = focused;
             if close {
                 win.open = false;

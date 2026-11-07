@@ -170,8 +170,8 @@ pub fn consume(ctx: &egui::Context, sc: &KeyboardShortcut) -> bool {
 pub const NAV_COMMANDS: [&str; 4] = ["view.zoomIn", "view.zoomOut", "view.fitOnScreen", "view.actualPixels"];
 
 /// Immediate document viewports do not run the main frame's shortcut handler. Dispatch only
-/// zoom steps here, inside the caller's isolated camera context; other shortcuts stay untouched.
-pub(crate) fn document_window_zoom_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
+/// zoom steps and display flip here, inside the caller's isolated camera context.
+pub(crate) fn document_window_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !ctx.input(|i| i.focused)
         || !ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })))
         || egui::Popup::is_any_open(ctx)
@@ -192,9 +192,11 @@ pub(crate) fn document_window_zoom_keys(app: &mut PhotocraftApp, ctx: &egui::Con
             let egui::Event::Key { key, modifiers, pressed: true, .. } = event else { return true };
             let matched = bindings.iter().find(|(_, sc)| focus.allows(sc) && key_matches(sc, *key, *modifiers));
             if let Some((id, _)) = matched
-                && matches!(id.as_str(), "view.zoomIn" | "view.zoomOut")
+                && matches!(id.as_str(), "view.zoomIn" | "view.zoomOut" | "view.flipHorizontal")
             {
-                commands.push(id.clone());
+                if id != "view.flipHorizontal" || app.flip_enabled() {
+                    commands.push(id.clone());
+                }
                 return false;
             }
             true

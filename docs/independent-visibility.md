@@ -216,3 +216,27 @@ combinations, masked/clipped groups and adjustments, shared editing and window/d
 closure. Secondary hover preview is intentionally disabled; main hover preview is retained.
 
 Phase 3 Windows build passed: cargo build --offline --locked -p photocraft --features heif (optimized dev profile). Executable: target/debug/photocraft.exe. Phase 3 changes are uncommitted on feature/independent-views; HEAD remains 2b34711cb. Nothing was pushed. Native visual/interaction verification is pending.
+
+## Independent horizontal flip
+
+Each secondary window has an **Independent Flip** checkbox above its canvas. It defaults
+to ON, including when loading older window settings. A new window starts with the Main
+View's flip orientation and canonical layer presentation, including adjustment parameters,
+regardless of native focus or the Layers panel's View target. Its initial camera framing
+continues to follow the source view. While ON, **View > Flip Horizontal**
+and its configured shortcut change that window's own orientation. While OFF, the window
+follows the Main View's horizontal orientation live. Its flip command is disabled and a
+matching shortcut in that native window is consumed without changing either camera.
+Turning the checkbox back ON restores the saved independent orientation. Zoom, pan,
+and rotation remain local in both modes.
+
+The window keeps its saved orientation in its existing camera and substitutes the Main
+View's orientation only while running canvas rendering and input for a follower. The
+saved orientation is restored when writing back that camera. A Main View flip requests
+a redraw of its followers. These settings are window presentation state and do not
+change the document or its history.
+
+For manual verification, open two secondary windows, flip one, then turn its checkbox
+OFF. Flip the Main View several times and verify that only the follower tracks it.
+Try the configured shortcut in the follower, then turn independence back ON and check
+that its previous orientation returns. Pan, zoom, and paint in each window while mirrored.

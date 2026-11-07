@@ -91,6 +91,7 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
         "view.layerVisibility" | "view.layerVisibility.showOnly" | "view.layerOpacity" | "view.layerBlend" | "view.layerAdjustment" => doc,
         "view.screenMode.fullScreen" | "view.screenMode.fullScreenWithMenuBar" => doc,
         "view.twoHundredPercent" | "view.printSize" | "view.fitLayersOnScreen" | "view.rotateView" | "view.resetView" => doc,
+        "view.flipHorizontal" => app.flip_enabled(),
         "view.fitArtboardOnScreen" => app.session.active().is_some_and(|d| d.doc.has_artboards()),
         i if i.starts_with("window.arrange.") => match &i["window.arrange.".len()..] {
             "consolidateAllToTabs" => true,
@@ -171,7 +172,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     }
     Some(match id {
         "view.extras" => o.extras,
-        "view.flipHorizontal" => app.focused_view().is_some_and(|v| v.flip_horizontal),
+        "view.flipHorizontal" => app.effective_flip(),
         "view.pixelAspectRatioCorrection" => o.pixel_aspect_correction,
         "view.patternPreview" => o.pattern_preview,
         "view.pixelArtPreview" => o.pixel_art_preview,
@@ -395,12 +396,12 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
             Ok(json!(o.extras))
         }
         "view.flipHorizontal" => {
-            let view = app.focused_view_mut().ok_or("no document")?;
-            view.flip_horizontal = flag_param(p, view.flip_horizontal);
-            let flipped = view.flip_horizontal;
-            ctx.request_repaint_of(app.focused_viewport());
-            ctx.request_repaint();
-            Ok(json!(flipped))
+            app.session.active().ok_or("no document")?;
+            let flipped = app.effective_flip();
+            if app.flip_enabled() {
+                app.set_flip(ctx, flag_param(p, flipped));
+            }
+            Ok(json!(app.effective_flip()))
         }
         "view.pixelAspectRatioCorrection" => {
             o.pixel_aspect_correction = flag_param(p, o.pixel_aspect_correction);

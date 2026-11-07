@@ -720,6 +720,7 @@ fn views_and_windows_stay_with_their_documents() {
             view: Default::default(),
             open: true,
             floating: false,
+            follow_main_flip: false,
             focused: false,
             position: None,
             visibility: Default::default(),

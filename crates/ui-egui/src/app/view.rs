@@ -36,20 +36,44 @@ impl PhotocraftApp {
             .or_else(|| self.ui.views.get(document))
     }
 
-    pub(crate) fn focused_view_mut(&mut self) -> Option<&mut crate::state::View> {
-        let document = self.session.active_index()?;
-        let window = self.ui.focused_window.and_then(|id| self.ui.windows.iter().position(|w| w.id == id && w.open && w.document == document));
-        match window {
-            Some(i) => self.ui.windows.get_mut(i).map(|w| &mut w.view),
-            None => self.ui.views.get_mut(document),
+    fn flip_window(&self) -> Option<&crate::state::DocWindow> {
+        let target = self.view_composites.rendering_window.or_else(|| crate::view_visibility::focused_window(self))?;
+        self.ui.windows.iter().find(|w| w.id == target && w.open)
+    }
+
+    pub(crate) fn flip_enabled(&self) -> bool {
+        self.session.active().is_some() && self.flip_window().is_none_or(|w| !w.follow_main_flip)
+    }
+
+    pub(crate) fn effective_flip(&self) -> bool {
+        match self.flip_window() {
+            Some(w) if self.view_composites.rendering_window.is_none() && !w.follow_main_flip => w.view.flip_horizontal,
+            Some(w) => self.ui.views.get(w.document).is_some_and(|v| v.flip_horizontal),
+            None => self.canvas_flip_horizontal(),
         }
     }
 
-    pub(crate) fn focused_viewport(&self) -> egui::ViewportId {
-        self.ui
-            .focused_window
-            .filter(|&id| self.ui.windows.iter().any(|w| w.id == id && w.open && Some(w.document) == self.session.active_index()))
-            .map_or(egui::ViewportId::ROOT, |id| egui::ViewportId::from_hash_of(("docwin", id)))
+    pub(crate) fn set_flip(&mut self, ctx: &egui::Context, flipped: bool) {
+        if !self.flip_enabled() {
+            return;
+        }
+        if let Some(w) = self.flip_window() {
+            let (id, document) = (w.id, w.document);
+            if self.view_composites.rendering_window.is_some() {
+                self.ui.views[document].flip_horizontal = flipped;
+            } else if let Some(w) = self.ui.windows.iter_mut().find(|w| w.id == id) {
+                w.view.flip_horizontal = flipped;
+            }
+            ctx.request_repaint_of(egui::ViewportId::from_hash_of(("docwin", id)));
+        } else if let Some(document) = self.session.active_index()
+            && let Some(view) = self.ui.views.get_mut(document)
+        {
+            view.flip_horizontal = flipped;
+            for w in self.ui.windows.iter().filter(|w| w.open && w.document == document && w.follow_main_flip) {
+                ctx.request_repaint_of(egui::ViewportId::from_hash_of(("docwin", w.id)));
+            }
+        }
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
 
     /// Capture native focus before shortcuts/control/menu dispatch. Opening the root menu
@@ -86,7 +110,12 @@ impl PhotocraftApp {
     /// and display scale. This prevents focused child input from leaking into the main view.
     pub(crate) fn with_document_window<R>(&mut self, id: u64, draw: impl FnOnce(&mut Self) -> R) -> Option<R> {
         let window = self.ui.windows.iter().find(|w| w.id == id && w.open)?;
-        let (document, camera) = (window.document, window.view.clone());
+        let (document, mut camera) = (window.document, window.view.clone());
+        let saved_flip = camera.flip_horizontal;
+        let following = window.follow_main_flip;
+        if following {
+            camera.flip_horizontal = self.ui.views.get(document)?.flip_horizontal;
+        }
         let document_id = self.session.documents().get(document)?.doc.id;
         let main = std::mem::replace(self.ui.views.get_mut(document)?, camera);
         let (rect, ppp) = (self.last_canvas_rect, self.ppp);
@@ -95,7 +124,10 @@ impl PhotocraftApp {
         self.view_composites.rendering_window = rendering_window;
         let document = self.session.documents().iter().position(|st| st.doc.id == document_id);
         if let Some(slot) = document.and_then(|i| self.ui.views.get_mut(i)) {
-            let camera = std::mem::replace(slot, main);
+            let mut camera = std::mem::replace(slot, main);
+            if following {
+                camera.flip_horizontal = saved_flip;
+            }
             if let Some(window) = self.ui.windows.iter_mut().find(|w| w.id == id) {
                 window.view = camera;
             }

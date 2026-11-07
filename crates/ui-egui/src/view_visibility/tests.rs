@@ -308,3 +308,57 @@ fn visibility_projection_preserves_group_clipping_mask_and_blend_semantics() {
     }
     assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
 }
+
+#[test]
+fn new_secondary_presentation_comes_from_main_regardless_of_focus_and_panel_target() {
+    let (mut app, ctx, _, layer) = fixture();
+    app.run("layer.newAdjustmentLayer.posterize", json!({})).unwrap();
+    let adjustment = app.session.active().unwrap().active_layer.unwrap();
+    let native = window(&mut app, &ctx);
+    let selected = window(&mut app, &ctx);
+
+    for (window, opacity, levels) in [(native, 0.25, 2), (selected, 0.5, 4)] {
+        set(&mut app, &ctx, window, layer, true);
+        for (id, params) in [
+            ("view.layerOpacity", json!({"window": window, "layer": layer.0, "opacity": opacity})),
+            ("view.layerBlend", json!({"window": window, "layer": layer.0, "blend": "multiply"})),
+        ] {
+            menus::invoke(&mut app, &ctx, id, params).unwrap();
+        }
+        adjustment_tests::change(&mut app, &ctx, window, adjustment, "commit", json!({"levels": levels}));
+    }
+    app.run("layer.setProps", json!({"layer": layer.0, "visible": false, "opacity": 0.75, "blend": "screen"})).unwrap();
+    app.run("layer.setAdjustment", json!({"layer": adjustment.0, "levels": 12})).unwrap();
+    app.ui.windows[0].view.flip_horizontal = true;
+    app.ui.windows[1].view.flip_horizontal = true;
+    let existing = app.ui.windows.clone();
+    let canonical = app.session.active().unwrap().doc.clone();
+
+    for (native_focus, panel_target) in [(None, None), (Some(native), Some(native)), (Some(native), Some(selected))] {
+        let mut raw = egui::RawInput::default();
+        raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().focused = Some(native_focus.is_none());
+        if let Some(id) = native_focus {
+            raw.viewports.insert(egui::ViewportId::from_hash_of(("docwin", id)), egui::ViewportInfo { focused: Some(true), ..Default::default() });
+        }
+        let mut output = ctx.run_ui(raw, |ui| app.update_view_focus(ui.ctx()));
+        output.textures_delta.clear();
+        assert_eq!(app.ui.focused_window, native_focus);
+        // The Layers panel's View selector writes the same target field.
+        app.ui.focused_window = panel_target;
+
+        let new = window(&mut app, &ctx);
+        let child = app.ui.windows.iter().find(|w| w.id == new).unwrap();
+        assert!(!child.follow_main_flip);
+        assert!(!child.view.flip_horizontal);
+        let projected = shown(&mut app, new);
+        for (_, _, expected) in canonical.walk() {
+            let actual = projected.layer(expected.id).unwrap();
+            assert_eq!((actual.visible, actual.opacity, actual.blend), (expected.visible, expected.opacity, expected.blend));
+            if matches!(&expected.content, photocraft_doc::LayerContent::Adjustment(_)) {
+                assert_eq!(actual.content, expected.content);
+            }
+        }
+        assert_eq!(&app.ui.windows[..existing.len()], existing.as_slice());
+    }
+    assert!(Arc::ptr_eq(&canonical, &app.session.active().unwrap().doc));
+}

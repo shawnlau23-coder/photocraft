@@ -69,7 +69,7 @@ fn independent_flip_single_window_and_explicit_on_parameter_keep_the_existing_co
 }
 
 #[test]
-fn independent_flip_new_windows_inherit_the_source_camera_but_own_their_copy() {
+fn independent_flip_new_windows_inherit_framing_from_source_but_flip_from_main() {
     let (mut app, ctx) = app();
     app.ui.views[0].flip_horizontal = true;
     let a = window(&mut app, &ctx);
@@ -77,11 +77,13 @@ fn independent_flip_new_windows_inherit_the_source_camera_but_own_their_copy() {
     app.ui.windows[0].view.zoom = 2.0;
     app.ui.windows[0].view.center = [9.0, 12.0];
     app.ui.windows[0].view.rotation = 37.0;
+    app.ui.windows[0].view.flip_horizontal = false;
     let b = window(&mut app, &ctx);
-    assert_eq!(app.ui.windows[0].view, app.ui.windows[1].view);
+    let expected = crate::state::View { flip_horizontal: true, ..app.ui.windows[0].view.clone() };
+    assert_eq!(app.ui.windows[1].view, expected);
     app.ui.focused_window = Some(b);
     assert!(!flip(&mut app, &ctx));
-    assert!(app.ui.windows[0].view.flip_horizontal);
+    assert!(!app.ui.windows[0].view.flip_horizontal);
     assert!(app.ui.views[0].flip_horizontal);
 }
 
@@ -316,7 +318,7 @@ fn keyboard_zoom_pass(app: &mut PhotocraftApp, ctx: &egui::Context, window: Opti
     let mut consumed = false;
     let mut out = ctx.run_ui(raw, |ui| {
         if let Some(id) = window {
-            app.with_document_window(id, |app| crate::shortcuts::document_window_zoom_keys(app, ui.ctx())).unwrap();
+            app.with_document_window(id, |app| crate::shortcuts::document_window_view_keys(app, ui.ctx())).unwrap();
         } else {
             crate::shortcuts::handle(app, ui.ctx());
         }
@@ -383,4 +385,95 @@ fn keyboard_zoom_secondary_respects_bindings_focus_and_leaves_other_view_shortcu
     assert!(keyboard_zoom_pass(&mut app, &ctx, Some(id), egui::Key::K, false, true));
     assert!(app.ui.windows[0].view.zoom > before.zoom);
     assert_eq!(app.ui.views[0].zoom, 1.0);
+}
+
+#[test]
+fn following_main_is_live_without_overwriting_the_saved_orientation_or_camera() {
+    let (mut app, ctx) = app();
+    let a = window(&mut app, &ctx);
+    let b = window(&mut app, &ctx);
+    let before = app.session.active().unwrap().clone();
+    assert!(app.ui.windows.iter().all(|w| !w.follow_main_flip));
+    app.ui.focused_window = Some(a);
+    assert!(flip(&mut app, &ctx));
+    app.ui.windows[0].follow_main_flip = true;
+    assert!(!app.flip_enabled());
+    assert_eq!(crate::view_cmds::checked(&app, "view.flipHorizontal"), Some(false));
+    assert!(!flip(&mut app, &ctx));
+    assert!(app.ui.windows[0].view.flip_horizontal);
+    let child = app.ui.windows[0].view.clone();
+
+    for main_flip in [true, false, true, false] {
+        app.ui.focused_window = None;
+        assert_eq!(flip(&mut app, &ctx), main_flip);
+        let main = app.ui.views[0].clone();
+        assert_eq!(app.with_document_window(a, |app| app.canvas_flip_horizontal()), Some(main_flip));
+        assert_eq!(app.with_document_window(b, |app| app.canvas_flip_horizontal()), Some(false));
+        assert_eq!(app.ui.windows[0].view, child);
+        assert_eq!(app.ui.views[0], main);
+    }
+
+    app.with_document_window(a, |app| {
+        app.ui.views[0].zoom = 2.0;
+        app.ui.views[0].center = [27.0, 21.0];
+    });
+    assert_eq!(app.ui.views[0].zoom, 1.0);
+    assert_eq!(app.ui.views[0].center, [32.0, 24.0]);
+    assert_eq!(app.ui.windows[1].view.zoom, 1.0);
+    assert_eq!(app.ui.windows[0].view.zoom, 2.0);
+    assert_eq!(app.ui.windows[0].view.center, [27.0, 21.0]);
+
+    app.ui.windows[0].follow_main_flip = false;
+    assert_eq!(app.with_document_window(a, |app| app.canvas_flip_horizontal()), Some(true));
+    app.ui.windows.retain(|w| w.id != a);
+    let c = window(&mut app, &ctx);
+    assert_ne!(a, c);
+    assert!(!app.ui.windows.last().unwrap().follow_main_flip);
+    assert_eq!(app.with_document_window(c, |app| app.canvas_flip_horizontal()), Some(false));
+    let after = app.session.active().unwrap();
+    assert!(Arc::ptr_eq(&before.doc, &after.doc));
+    assert_eq!(before.revision, after.revision);
+    assert_eq!(before.history.past_len(), after.history.past_len());
+}
+
+#[test]
+fn configured_flip_shortcut_targets_the_native_camera_and_is_consumed_while_following() {
+    let (mut app, ctx) = app();
+    let a = window(&mut app, &ctx);
+    let b = window(&mut app, &ctx);
+    app.session.edit_prefs(|p| {
+        p.shortcuts.insert("view.flipHorizontal".into(), "Cmd+K".into());
+    });
+    let key = egui::Key::K;
+    assert!(!keyboard_zoom_pass(&mut app, &ctx, Some(a), key, false, false));
+    // The Layers panel may have explicitly selected a different target.
+    app.ui.focused_window = Some(b);
+    assert!(keyboard_zoom_pass(&mut app, &ctx, Some(a), key, false, true));
+    assert!(app.ui.windows[0].view.flip_horizontal);
+    assert!(!app.ui.windows[1].view.flip_horizontal);
+    assert!(!app.ui.views[0].flip_horizontal);
+
+    app.ui.windows[0].follow_main_flip = true;
+    assert!(keyboard_zoom_pass(&mut app, &ctx, Some(a), key, false, true));
+    assert!(app.ui.windows[0].view.flip_horizontal);
+    assert!(!app.ui.views[0].flip_horizontal);
+
+    app.ui.focused_window = None;
+    assert!(keyboard_zoom_pass(&mut app, &ctx, None, key, false, true));
+    assert!(app.ui.views[0].flip_horizontal);
+    assert_eq!(app.with_document_window(a, |app| app.canvas_flip_horizontal()), Some(true));
+    assert_eq!(app.with_document_window(b, |app| app.canvas_flip_horizontal()), Some(false));
+}
+
+#[test]
+fn older_window_state_defaults_to_independent_flip() {
+    let (mut app, ctx) = app();
+    window(&mut app, &ctx);
+    app.ui.windows[0].follow_main_flip = true;
+    let mut saved = serde_json::to_value(&app.ui.windows[0]).unwrap();
+    let restored: crate::state::DocWindow = serde_json::from_value(saved.clone()).unwrap();
+    assert!(restored.follow_main_flip);
+    saved.as_object_mut().unwrap().remove("follow_main_flip");
+    let restored: crate::state::DocWindow = serde_json::from_value(saved).unwrap();
+    assert!(!restored.follow_main_flip);
 }

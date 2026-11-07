@@ -196,6 +196,9 @@ pub struct DocWindow {
     pub visibility: crate::view_visibility::Visibility,
     pub id: u64,
     pub document: usize,
+    /// Follow the main camera's reflection while keeping `view.flip_horizontal` as the saved independent orientation.
+    #[serde(default)]
+    pub follow_main_flip: bool,
     pub view: View,
     pub open: bool,
     /// This window owns the document's view; the document is removed from the main canvas.
