@@ -721,6 +721,7 @@ fn views_and_windows_stay_with_their_documents() {
             open: true,
             floating: false,
             follow_main_flip: false,
+            follow_main_settings: false,
             focused: false,
             position: None,
             visibility: Default::default(),

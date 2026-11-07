@@ -136,7 +136,11 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let visibility_window = crate::view_visibility::focused_window(app);
     let doc = visibility_window.map_or_else(|| canonical.clone(), |id| crate::view_visibility::project(app, id, canonical.clone()).0);
     if let Some(id) = visibility_window {
-        ui.label(format!("Window {id}: display-only eyes, opacity and blend"));
+        if crate::view_visibility::settings_read_only(app, Some(id)) {
+            ui.label(format!("Window {id}: layer settings follow Main View"));
+        } else {
+            ui.label(format!("Window {id}: display-only eyes, opacity and blend"));
+        }
         ui.small("Other layer controls edit the shared document.");
     }
     let active_layer = active.and_then(|id| doc.layer(id));
@@ -179,7 +183,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ids.iter().all(|id| doc.layer(*id).is_some_and(|x| x.is_group()))
         };
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(!bg || visibility_window.is_some(), |ui| {
+            let editable = !crate::view_visibility::settings_read_only(app, visibility_window);
+            ui.add_enabled_ui(editable && (!bg || visibility_window.is_some()), |ui| {
                 let mut m = l.blend;
                 // Reserve space for the numeric field first. On a narrow dock, hide the
                 // redundant visible Opacity label rather than force the dropdown beyond

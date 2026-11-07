@@ -199,6 +199,8 @@ pub struct DocWindow {
     /// Follow the main camera's reflection while keeping `view.flip_horizontal` as the saved independent orientation.
     #[serde(default)]
     pub follow_main_flip: bool,
+    #[serde(default)]
+    pub follow_main_settings: bool,
     pub view: View,
     pub open: bool,
     /// This window owns the document's view; the document is removed from the main canvas.

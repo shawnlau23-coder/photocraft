@@ -106,7 +106,7 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
         doc.layer(id).map(|l| l.visible)
     });
     if let Some(mut vis) = visibility
-        && widgets::toggle(ui, &mut vis, tl!("Adjustment visible")).changed()
+        && ui.add_enabled_ui(!crate::view_visibility::settings_read_only(app, window), |ui| widgets::toggle(ui, &mut vis, tl!("Adjustment visible"))).inner.changed()
     {
         let params = json!({"layer": id.0, "visible": vis});
         if !crate::view_visibility::panel_action(app, ui.ctx(), window, "layer.setProps", &params) {
@@ -159,7 +159,8 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     if let Some(id) = opacity_window {
         ui.small(format!("Opacity: Window {id} (display only)"));
     }
-    let r = widgets::slider_row(ui, tl!("Opacity"), &mut o, 0.0..=100.0, "%", None);
+    let editable = !crate::view_visibility::settings_read_only(app, opacity_window);
+    let r = ui.add_enabled_ui(editable, |ui| widgets::slider_row(ui, tl!("Opacity"), &mut o, 0.0..=100.0, "%", None)).inner;
     if r.drag_stopped() || (r.changed() && !r.dragged()) {
         let params = json!({"layer": layer.id.0, "opacity": o / 100.0});
         if !crate::view_visibility::panel_action(app, ui.ctx(), opacity_window, "layer.setProps", &params) {

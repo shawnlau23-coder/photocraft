@@ -749,15 +749,24 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 app.session.set_active(w.document);
             }
             egui::Panel::top(egui::Id::unique(("independent-flip", w.id))).resizable(false).show(ui, |ui| {
-                let mut independent = !w.follow_main_flip;
-                if ui.checkbox(&mut independent, tl!("Independent Flip"))
-                    .on_hover_text(tl!("When off, this window follows the Main View and its flip shortcut is disabled."))
-                    .changed()
-                    && let Some(win) = app.ui.windows.iter_mut().find(|win| win.id == w.id)
-                {
-                    win.follow_main_flip = !independent;
-                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
-                }
+                ui.horizontal(|ui| {
+                    let mut independent = !w.follow_main_flip;
+                    if ui.checkbox(&mut independent, tl!("Independent Flip"))
+                        .on_hover_text(tl!("When off, this window follows the Main View and its flip shortcut is disabled."))
+                        .changed()
+                        && let Some(win) = app.ui.windows.iter_mut().find(|win| win.id == w.id)
+                    {
+                        win.follow_main_flip = !independent;
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    }
+                    let mut settings = !w.follow_main_settings;
+                    if ui.checkbox(&mut settings, tl!("Independent Settings"))
+                        .on_hover_text(tl!("When off, layer presentation and adjustment settings follow Main View."))
+                        .changed()
+                    {
+                        crate::view_visibility::set_follow_main_settings(app, ui.ctx(), w.id, !settings);
+                    }
+                });
             });
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();

@@ -333,8 +333,13 @@ fn eye_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer, row: RowSel
         // Centre the drawing in the column while preserving the visibility hit area.
         icons::paint(ui, eye_cell, "eye", 15.0, t.layer_label_icon(l.label));
     }
-    eye_sweep(ctx, l, rect, &eye_resp, actions);
-    if eye_resp.clicked() {
+    let editable = !crate::view_visibility::settings_read_only(app, crate::view_visibility::focused_window(app));
+    if editable {
+        eye_sweep(ctx, l, rect, &eye_resp, actions);
+    } else {
+        ctx.data_mut(|data| data.remove::<EyeSweep>(egui::Id::unique("layer-eye-sweep")));
+    }
+    if editable && eye_resp.clicked() {
         // ⌥-click shows only this layer; ⌥-click it again to restore the others.
         if ui.input(|i| i.modifiers.alt) {
             actions.push(("layer.showOnly".into(), json!({"layer": l.id.0})));

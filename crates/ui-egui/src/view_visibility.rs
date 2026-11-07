@@ -95,8 +95,29 @@ pub(crate) fn focused_window(app: &PhotocraftApp) -> Option<u64> {
     app.ui.focused_window.filter(|id| app.ui.windows.iter().any(|w| w.id == *id && w.open && w.document == doc))
 }
 
+pub(crate) fn settings_read_only(app: &PhotocraftApp, window: Option<u64>) -> bool {
+    app.ui.windows.iter().any(|w| Some(w.id) == window && w.open && w.follow_main_settings)
+}
+
+pub(crate) fn set_follow_main_settings(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, follow: bool) {
+    let Some(w) = app.ui.windows.iter_mut().find(|w| w.id == window && w.open && w.follow_main_settings != follow) else { return };
+    w.follow_main_settings = follow;
+    w.visibility.invalidate_adjustment_targets();
+    adjustments::prune(app);
+    // Canonical preview keys and projection keys occupy different namespaces.
+    app.view_composites.caches.remove(&window);
+    app.view_composites.channels.remove(&window);
+    app.view_composites.projections.remove(&window);
+    app.view_composites.histograms.remove(&window);
+    ctx.request_repaint_of(egui::ViewportId::from_hash_of(("docwin", window)));
+    ctx.request_repaint_of(egui::ViewportId::ROOT);
+}
+
 pub(crate) fn focused_opacity(app: &PhotocraftApp, layer: LayerId) -> Option<f32> {
     let id = focused_window(app)?;
+    if settings_read_only(app, Some(id)) {
+        return None;
+    }
     app.ui.windows.iter().find(|w| w.id == id)?.visibility.opacity.get(&layer).copied()
 }
 
@@ -159,6 +180,9 @@ pub(crate) fn project(app: &mut PhotocraftApp, window: u64, source: Arc<Document
 
 fn project_with_key(app: &mut PhotocraftApp, window: u64, source: Arc<Document>, source_key: u64) -> (Arc<Document>, u64) {
     initialize(app, window);
+    if settings_read_only(app, Some(window)) {
+        return (source, source_key);
+    }
     let adjustments = adjustments::effective_snapshots(app, window);
     let revision = app.session.documents().iter().find(|st| st.doc.id == source.id).map_or(0, |st| st.revision);
     let source_key = (revision, source_key);
@@ -219,6 +243,9 @@ fn project_with_key(app: &mut PhotocraftApp, window: u64, source: Arc<Document>,
 /// views keep the layered source until those operations commit; live paint remains layered.
 pub(crate) fn render_document(app: &mut PhotocraftApp, idx: usize, source: Arc<Document>, key: u64) -> (Arc<Document>, u64) {
     let Some(window) = app.view_composites.rendering_window else { return (source, key) };
+    if settings_read_only(app, Some(window)) {
+        return (source, key);
+    }
     let Some(st) = app.session.documents().get(idx) else { return (source, key) };
     let canonical = st.doc.clone();
     let source_ids: Vec<_> = source.walk().into_iter().map(|(_, _, l)| l.id).collect();
@@ -269,6 +296,9 @@ pub(crate) fn command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p:
         None => focused_window(app).ok_or("select a secondary document window")?,
     };
     let w = app.ui.windows.iter().find(|w| w.id == window && w.open).ok_or("secondary window is closed")?;
+    if w.follow_main_settings {
+        return Err("secondary window follows Main View settings".into());
+    }
     let doc = app.session.documents().get(w.document).ok_or("document is closed")?.doc.clone();
     if id == "view.layerOpacity" {
         return set_opacity(app, ctx, window, &doc, p);
@@ -383,6 +413,9 @@ pub(crate) fn panel_action(app: &mut PhotocraftApp, ctx: &egui::Context, window:
         "layer.showOnly" => "view.layerVisibility.showOnly",
         _ => return false,
     };
+    if settings_read_only(app, Some(window)) {
+        return true;
+    }
     let params = json!({"window": window, "layer": p.get("layer"), "layers": p.get("layers"), "visible": p.get("visible"), "opacity": p.get("opacity"), "blend": p.get("blend")});
     if let Err(error) = command(app, ctx, command_id, &params) {
         app.ui.status = error;

@@ -240,3 +240,28 @@ For manual verification, open two secondary windows, flip one, then turn its che
 OFF. Flip the Main View several times and verify that only the follower tracks it.
 Try the configured shortcut in the follower, then turn independence back ON and check
 that its previous orientation returns. Pan, zoom, and paint in each window while mirrored.
+
+## Independent Settings
+
+The **Independent Settings** checkbox appears next to **Independent Flip** above each
+secondary canvas. Both default to ON. With Independent Settings ON, the secondary uses
+its own layer visibility, opacity, blending, and adjustment parameters. New views
+initialize those settings from Main View regardless of the focused or selected window.
+
+Turning Independent Settings OFF uses Main View's current settings live. The Layers
+panel shows the effective values and blocks edits to those settings for that target.
+Properties disables opacity and adjustment visibility edits and hides the adjustment
+editor while following. Returning to ON restores the stored values for surviving
+layers and compatible adjustment types. The usual layer and document lifecycle rules
+still apply in either mode. Any in-progress secondary adjustment edit is canceled
+on switching modes, including pending picker results.
+
+The switch changes only that window's render source and edit routing. Independent
+Flip and camera framing remain separate. Shared editing, including masks, fill content,
+and geometry, remains available through its existing controls. Save, export, and undo
+continue using canonical document data.
+
+For manual testing, give two secondary windows different layer and adjustment settings.
+Switch one OFF, edit Main, then switch it ON and verify that its original settings
+return. Repeat while a secondary adjustment picker is open, and verify both flip
+checkboxes and their shortcuts independently.

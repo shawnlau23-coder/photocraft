@@ -82,6 +82,10 @@ pub fn properties_reset(ctx: &egui::Context, doc: u64, id: LayerId, adj: &Adjust
 /// The Properties-panel editor of an adjustment layer: previews live (`app.live_adjust`) while a
 /// control moves and commits one `layer.setAdjustment` per gesture.
 pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
+    if crate::view_visibility::settings_read_only(app, crate::view_visibility::focused_window(app)) {
+        ui.label(tl!("Adjustment parameters follow Main View."));
+        return;
+    }
     if let Some(target) = crate::view_visibility::adjustments::Target::current(app, id) {
         if target.window.is_some() || matches!(adj, Adjustment::Posterize { .. } | Adjustment::Levels { .. }) {
             targeted_layer_editor(app, ui, target);

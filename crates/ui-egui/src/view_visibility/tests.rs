@@ -362,3 +362,73 @@ fn new_secondary_presentation_comes_from_main_regardless_of_focus_and_panel_targ
     }
     assert!(Arc::ptr_eq(&canonical, &app.session.active().unwrap().doc));
 }
+
+#[test]
+fn independent_settings_follow_canonical_and_restore_without_accepting_stale_edits() {
+    use crate::view_visibility::adjustments as edit;
+    let (mut app, ctx, layer, _) = fixture();
+    app.run("layer.newAdjustmentLayer.posterize", json!({})).unwrap();
+    let adjustment = app.session.active().unwrap().active_layer.unwrap();
+    let a = window(&mut app, &ctx);
+    let b = window(&mut app, &ctx);
+    assert!(app.ui.windows.iter().all(|w| !w.follow_main_settings));
+    let run = |app: &mut PhotocraftApp, id, p| menus::invoke(app, &ctx, id, p);
+    set(&mut app, &ctx, a, layer, false);
+    run(&mut app, "view.layerOpacity", json!({"window": a, "layer": layer.0, "opacity": 0.25})).unwrap();
+    run(&mut app, "view.layerBlend", json!({"window": a, "layer": layer.0, "blend": "multiply"})).unwrap();
+    adjustment_tests::change(&mut app, &ctx, a, adjustment, "commit", json!({"levels": 2}));
+    let independent = shown(&mut app, a);
+    let other = shown(&mut app, b);
+    app.ui.windows[0].view.flip_horizontal = true;
+    app.ui.focused_window = Some(a);
+    let target = edit::Target::current(&mut app, adjustment).unwrap();
+    edit::preview(&mut app, target, &json!({"levels": 3})).unwrap();
+    let epoch = app.view_composites.editor.ui_epoch;
+    app.ui.focused_window = Some(b); // Properties target differs from the checkbox's native window.
+    set_follow_main_settings(&mut app, &ctx, a, true);
+    assert_eq!(app.ui.focused_window, Some(b));
+    assert!(app.view_composites.editor.target.is_none());
+
+    app.ui.focused_window = Some(a);
+    let before = app.session.active().unwrap().clone();
+    assert!(settings_read_only(&app, Some(a)));
+    assert!(edit::Target::current(&mut app, adjustment).is_none());
+    for (id, p) in [
+        ("view.layerVisibility", json!({"layer": layer.0, "visible": true})),
+        ("view.layerVisibility.showOnly", json!({"layer": layer.0})),
+        ("view.layerOpacity", json!({"layer": layer.0, "opacity": 0.5})),
+        ("view.layerBlend", json!({"layer": layer.0, "blend": "screen"})),
+        ("view.layerAdjustment", json!({"layer": adjustment.0, "params": {"levels": 6}})),
+    ] {
+        assert!(run(&mut app, id, p).is_err());
+    }
+    assert!(panel_action(&mut app, &ctx, Some(a), "layer.setProps", &json!({"layer": layer.0, "opacity": 0.5})));
+    assert!(!edit::accepts_completion(&app, target, epoch));
+    assert!(Arc::ptr_eq(&shown(&mut app, a), &before.doc));
+    assert_eq!(before.history.past_len(), app.session.active().unwrap().history.past_len());
+
+    app.run("layer.setProps", json!({"layer": layer.0, "visible": true, "opacity": 0.75, "blend": "screen"})).unwrap();
+    app.run("layer.setAdjustment", json!({"layer": adjustment.0, "levels": 12})).unwrap();
+    let canonical = app.session.active().unwrap().doc.clone();
+    assert!(Arc::ptr_eq(&shown(&mut app, a), &canonical));
+    let rendered = app.with_document_window(a, |app| render_document(app, 0, canonical.clone(), 23)).unwrap();
+    assert!(Arc::ptr_eq(&rendered.0, &canonical));
+    assert_eq!(rendered.1, 23);
+    let c = window(&mut app, &ctx);
+    assert!(!app.ui.windows.iter().find(|w| w.id == c).unwrap().follow_main_settings);
+    assert_eq!(shown(&mut app, c).layer(adjustment).unwrap().content, canonical.layer(adjustment).unwrap().content);
+
+    set_follow_main_settings(&mut app, &ctx, a, false);
+    assert!(edit::commit(&mut app, target, &json!({"levels": 6}), false).is_err());
+    let restored = shown(&mut app, a);
+    let still_other = shown(&mut app, b);
+    for id in [layer, adjustment] {
+        assert_eq!(restored.layer(id), independent.layer(id));
+        assert_eq!(still_other.layer(id), other.layer(id));
+    }
+    assert!(app.ui.windows[0].view.flip_horizontal);
+    assert!(Arc::ptr_eq(&canonical, &app.session.active().unwrap().doc));
+    app.ui.windows[0].open = false;
+    retain(&mut app);
+    assert!(!app.view_composites.projections.contains_key(&a));
+}

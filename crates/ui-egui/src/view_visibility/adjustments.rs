@@ -11,6 +11,13 @@ pub(crate) struct Snapshot {
 }
 
 impl Visibility {
+    pub(super) fn invalidate_adjustment_targets(&mut self) {
+        for snapshot in self.adjustments.values_mut() {
+            self.adjustment_serial = self.adjustment_serial.wrapping_add(1).max(1);
+            snapshot.epoch = self.adjustment_serial;
+        }
+    }
+
     pub(super) fn sync_adjustments(&mut self, doc: &Document) {
         self.adjustments.retain(|id, _| doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Adjustment(_))));
         for (_, _, layer) in doc.walk() {
@@ -47,6 +54,9 @@ impl Target {
     }
 
     fn new(app: &mut PhotocraftApp, window: Option<u64>, layer: LayerId) -> Result<Self, String> {
+        if settings_read_only(app, window) {
+            return Err("secondary window follows Main View settings".into());
+        }
         let idx = match window {
             Some(id) => app.ui.windows.iter().find(|w| w.id == id && w.open).map(|w| w.document).ok_or("secondary window is closed")?,
             None => app.session.active_index().ok_or("no document")?,
@@ -94,6 +104,7 @@ impl Target {
             let valid = app.ui.windows.iter().any(|w| {
                 w.id == id
                     && w.open
+                    && !w.follow_main_settings
                     && app.session.documents().get(w.document).is_some_and(|d| d.doc.id == self.document)
                     && w.visibility.adjustments.get(&self.layer).is_some_and(|s| s.epoch == self.epoch)
             });
