@@ -158,7 +158,7 @@ fn ctrl_alt_drag_resizes_the_pencil_without_painting() {
 #[test]
 fn square_cursor_sits_on_the_pixel_grid() {
     let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), vec2(800.0, 600.0));
-    let xf = ViewXform { rect, zoom: 8.0, center: [50.0, 37.5], flip: false, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 8.0, center: [50.0, 37.5], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     // 1 px at 800 %: the 8-point square of the pixel under the pointer.
     let r = pencil_cursor_rect(&xf, [10.3, 5.7], 1.0, 1.0);
     assert_eq!(r, Rect::from_two_pos(xf.to_screen(10.0, 5.0), xf.to_screen(11.0, 6.0)));
@@ -175,6 +175,7 @@ fn square_cursor_sits_on_the_pixel_grid() {
             zoom,
             center: [50.2, 37.9],
             flip: true,
+            flip_vertical: false,
             rotation: 0.0,
             aspect: 1.0,
         };

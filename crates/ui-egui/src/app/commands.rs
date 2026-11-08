@@ -6,6 +6,14 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if self.secondary_canvas() && matches!(id, "view.zoomIn" | "view.zoomOut") {
+            return actions::run_view(self, id, params);
+        }
+        if self.secondary_canvas() && matches!(id, "document.sampleColor" | "tools.setColors") {
+            // Sampling and changing the active swatch need none of the editing interceptors.
+            return self.session.execute(id, params).map_err(|error| error.to_string());
+        }
+        self.require_main_view()?;
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -35,6 +43,7 @@ impl PhotocraftApp {
     }
 
     pub(crate) fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.require_main_view()?;
         self.run_depth += 1;
         let r = self.run_command_at_depth(id, params);
         self.run_depth -= 1;

@@ -46,6 +46,7 @@ fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
         zoom: v.zoom,
         center: v.center,
         flip: app.canvas_flip_horizontal(),
+        flip_vertical: app.canvas_flip_vertical(),
         rotation: v.rotation,
         aspect: app.ui.view.display_aspect(),
     }

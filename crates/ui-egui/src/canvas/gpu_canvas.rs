@@ -155,6 +155,7 @@ pub struct ViewParams {
     pub rotation: f32,
     /// Reflect screen X after rotation, around the viewport center.
     pub flip: bool,
+    pub flip_vertical: bool,
     /// Draw the drop shadow on the pasteboard.
     pub shadow: bool,
     /// Draw the pixel grid at high zoom.

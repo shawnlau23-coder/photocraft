@@ -217,16 +217,16 @@ closure. Secondary hover preview is intentionally disabled; main hover preview i
 
 Phase 3 Windows build passed: cargo build --offline --locked -p photocraft --features heif (optimized dev profile). Executable: target/debug/photocraft.exe. Phase 3 changes are uncommitted on feature/independent-views; HEAD remains 2b34711cb. Nothing was pushed. Native visual/interaction verification is pending.
 
-## Independent horizontal flip
+## Independent horizontal and vertical flip
 
 Each secondary window has an **Independent Flip** checkbox above its canvas. It defaults
 to ON, including when loading older window settings. A new window starts with the Main
 View's flip orientation and canonical layer presentation, including adjustment parameters,
 regardless of native focus or the Layers panel's View target. Its initial camera framing
-continues to follow the source view. While ON, **View > Flip Horizontal**
-and its configured shortcut change that window's own orientation. While OFF, the window
-follows the Main View's horizontal orientation live. Its flip command is disabled and a
-matching shortcut in that native window is consumed without changing either camera.
+continues to follow the source view. While ON, **View > Flip Horizontal** and
+**View > Flip Vertical** control separate screen axes after rotation. While OFF, the window
+follows both Main View axes live. Both commands are disabled for that window and matching
+shortcuts are consumed without changing either camera. Vertical flip has no default shortcut.
 Turning the checkbox back ON restores the saved independent orientation. Zoom, pan,
 and rotation remain local in both modes.
 
@@ -234,13 +234,23 @@ The window keeps its saved orientation in its existing camera and substitutes th
 View's orientation only while running canvas rendering and input for a follower. The
 saved orientation is restored when writing back that camera. A Main View flip requests
 a redraw of its followers. These settings are window presentation state and do not
-change the document or its history.
+change the document or its history. Eligible secondary windows apply both flips when presenting
+the GPU composite, so changing either axis reuses the resident output. Main uses its existing
+CPU canvas for mirrored orientations.
 
 For manual verification, open two secondary windows, flip one, then turn its checkbox
 OFF. Flip the Main View several times and verify that only the follower tracks it.
 Try the configured shortcut in the follower, then turn independence back ON and check
-that its previous orientation returns. Pan, zoom, and paint in each window while mirrored.
+that its previous orientation returns. Pan and zoom in each window while mirrored.
 
+
+## Display-only secondary canvases
+
+Secondary native document windows accept navigation, both view flips, and linked-cursor
+tracking. The Eyedropper and temporary Alt sampling read the shared artwork and update
+the active swatch. Painting and other document edits use the Main canvas. The Main
+window's Layers and Properties panels can still change the selected secondary's
+independent presentation settings.
 ## Independent Settings
 
 The **Independent Settings** checkbox appears next to **Independent Flip** above each

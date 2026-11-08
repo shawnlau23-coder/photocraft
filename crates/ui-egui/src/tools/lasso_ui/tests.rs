@@ -158,6 +158,7 @@ fn mouse(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, kind: &str, x: f
         zoom: v.zoom,
         center: v.center,
         flip: false,
+        flip_vertical: false,
         rotation: v.rotation,
         aspect: 1.0,
     };
@@ -413,6 +414,7 @@ fn real_canvas_backspace_and_right_click_retract_polygonal_points() {
         zoom: view.zoom,
         center: view.center,
         flip: false,
+        flip_vertical: false,
         rotation: 0.0,
         aspect: 1.0,
     };

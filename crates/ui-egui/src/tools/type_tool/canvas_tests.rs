@@ -391,6 +391,7 @@ fn the_caret_reads_on_white_and_on_black() {
         zoom: 1.0,
         center: [100.0, 100.0],
         flip: false,
+        flip_vertical: false,
         rotation: 0.0,
         aspect: 1.0,
     };
@@ -423,6 +424,7 @@ fn xf(app: &PhotocraftApp) -> ViewXform {
         zoom: v.zoom / app.canvas_ppp(),
         center: v.center,
         flip: app.canvas_flip_horizontal(),
+        flip_vertical: app.canvas_flip_vertical(),
         rotation: v.rotation,
         aspect: app.ui.view.display_aspect(),
     }
@@ -3150,6 +3152,7 @@ fn box_overlay(text: &str, height: u32, turn: f64) -> (Vec<egui::Shape>, Pos2) {
         zoom: 1.0,
         center: [400.0, 300.0],
         flip: false,
+        flip_vertical: false,
         rotation: 0.0,
         aspect: 1.0,
     };

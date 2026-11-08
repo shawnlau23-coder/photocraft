@@ -11,7 +11,7 @@ fn app() -> PhotocraftApp {
 }
 
 fn camera(flip: bool, rotation: f32, zoom: f32, center: [f32; 2], size: [f32; 2]) -> ViewXform {
-    ViewXform { rect: Rect::from_min_size(pos2(20.0, 40.0), vec2(size[0], size[1])), zoom, center, flip, rotation, aspect: 1.0 }
+    ViewXform { rect: Rect::from_min_size(pos2(20.0, 40.0), vec2(size[0], size[1])), zoom, center, flip, flip_vertical: false, rotation, aspect: 1.0 }
 }
 
 fn sample(doc: DocId, viewport: ViewportId, canvas: Id, position: [f64; 2]) -> Pointer {
@@ -70,7 +70,7 @@ fn linked_cursor_projects_both_directions_with_independent_cameras_and_dpi() {
                 for flip_b in [false, true] {
                     for rotation in [0.0, 37.0, 90.0, -25.0] {
                         let a = camera(flip_a, rotation, 1.25 / source_ppp, [510.0, 390.0], [800.0, 600.0]);
-                        let b = camera(flip_b, -rotation, 0.75 / target_ppp, [480.0, 420.0], [600.0, 400.0]);
+                        let b = ViewXform { flip_vertical: true, ..camera(flip_b, -rotation, 0.75 / target_ppp, [480.0, 420.0], [600.0, 400.0]) };
                         for (source, receiver, ppp) in [(a, b, target_ppp), (b, a, source_ppp)] {
                             let document_point = [525.0, 405.0];
                             let actual_mouse = source.to_screen(document_point[0], document_point[1]);

@@ -14,7 +14,7 @@ fn transform_controls_frame_the_moved_pixels_not_the_marquee() {
     app.ui.tool = Tool::Move;
     app.ui.tool_options.move_show_transform = true;
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let frame = |app: &PhotocraftApp| {
         let r = transform_controls_rect(app, &xf).unwrap();
         let (lt, rb) = (xf.to_doc(r.left_top()), xf.to_doc(r.right_bottom()));
@@ -119,7 +119,7 @@ fn a_floating_piece_among_several_selected_layers_keeps_the_shared_frame() {
     app.session.execute("select.float", json!({"dx": 5, "dy": 0})).unwrap();
     assert!(photocraft_engine::float_cmds::floating(app.session.active().unwrap()).is_some());
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let r = transform_controls_rect(&app, &xf).unwrap();
     let (lt, rb) = (xf.to_doc(r.left_top()), xf.to_doc(r.right_bottom()));
     assert!(rb[0] - lt[0] > 60.0 && rb[1] - lt[1] > 60.0, "the frame isn't shrunk to the one piece: {lt:?} {rb:?}");
@@ -139,7 +139,7 @@ fn several_selected_layers_share_one_frame_that_transforms_them_all() {
     app.ui.tool = Tool::Move;
     app.ui.tool_options.move_show_transform = true;
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let one = transform_controls_rect(&app, &xf).unwrap();
     app.session.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
     let both = transform_controls_rect(&app, &xf).unwrap();
@@ -168,7 +168,7 @@ fn move_transform_controls_start_free_transform_for_vector_shapes() {
     app.ui.tool_options.move_show_transform = true;
 
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let r = transform_controls_rect(&app, &xf).expect("shape layers have transform bounds");
     assert!(transform_controls_hit(r, r.right_bottom()));
 
@@ -189,7 +189,7 @@ fn hiding_extras_hides_the_move_transform_controls() {
     app.ui.tool = Tool::Move;
     app.ui.tool_options.move_show_transform = true;
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let ctx = egui::Context::default();
     let shown = transform_controls_rect(&app, &xf).expect("the box shows with Extras on");
     let layer = app.session.active().unwrap().doc.layers.clone();
@@ -231,7 +231,7 @@ fn move_transform_controls_follow_floating_selected_pixels() {
     app.ui.tool_options.move_show_transform = true;
     assert!(crate::move_ui::float_selected(&mut app, false, 100.0, 50.0));
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [200.0, 150.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [200.0, 150.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let r = transform_controls_rect(&app, &xf).unwrap();
     assert_eq!(r, Rect::from_min_max(pos2(200.0, 150.0), pos2(300.0, 210.0)));
     let ctx = egui::Context::default();
@@ -252,7 +252,7 @@ fn move_transform_controls_frame_the_selection() {
     app.ui.tool = Tool::Move;
     app.ui.tool_options.move_show_transform = true;
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [200.0, 150.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [200.0, 150.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let r = transform_controls_rect(&app, &xf).unwrap();
     assert_eq!(r, Rect::from_min_max(pos2(60.0, 80.0), pos2(160.0, 200.0)));
     let ctx = egui::Context::default();
@@ -294,7 +294,7 @@ fn free_transform_on_a_locked_layer_is_refused_up_front() {
     app.ui.tool = Tool::Move;
     app.ui.tool_options.move_show_transform = true;
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let r = transform_controls_rect(&app, &xf).unwrap();
     assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
     assert!(app.ui.transform.is_none());
@@ -310,7 +310,7 @@ fn move_transform_controls_show_resize_and_rotate_cursors_before_first_interacti
     app.ui.tool = Tool::Move;
     app.ui.tool_options.move_show_transform = true;
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
 
     let r = transform_controls_rect(&app, &xf).expect("visible shape controls");
     assert!(app.ui.transform.is_none(), "no transform session is needed for hover");

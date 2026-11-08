@@ -290,11 +290,9 @@ pub fn draw_remove_pending(app: &mut PhotocraftApp, painter: &egui::Painter, xf:
     if !remove_pending_live(app) {
         return;
     }
-    let Some(bounds) = app.session.active().map(|st| st.doc.bounds()) else { return };
-    let doc_rect = xf.doc_rect(bounds);
     let col = Tokens::get(painter.ctx()).danger.gamma_multiply(0.45);
     if let Some(trail) = app.remove_trail.as_mut() {
-        trail.draw(painter, doc_rect, xf.flip, col);
+        trail.draw(painter, xf, col);
     }
 }
 

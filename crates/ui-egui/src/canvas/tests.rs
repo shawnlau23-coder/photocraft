@@ -1218,7 +1218,7 @@ fn clone_overlay_alpha(app: &PhotocraftApp, output: &mut egui::FullOutput) -> im
 }
 
 fn clone_overlay_view(side: f32, zoom: f32) -> ViewXform {
-    ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)), zoom, center: [32.0, 32.0], flip: false, rotation: 0.0, aspect: 1.0 }
+    ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)), zoom, center: [32.0, 32.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 }
 }
 
 #[test]
@@ -1543,7 +1543,7 @@ fn brush_tip_centre_follows_the_crosshair_preference_at_any_size() {
 fn view_transform_roundtrip() {
     for flip in [false, true] {
         let xf =
-            ViewXform { rect: Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0)), zoom: 2.5, center: [320.0, 240.0], flip, rotation: 0.0, aspect: 1.0 };
+            ViewXform { rect: Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0)), zoom: 2.5, center: [320.0, 240.0], flip, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
         let s = xf.to_screen(10.0, 20.0);
         let d = xf.to_doc(s);
         assert!((d[0] - 10.0).abs() < 1e-3 && (d[1] - 20.0).abs() < 1e-3);
@@ -2231,7 +2231,7 @@ fn drag_preview_shapes(app: &mut PhotocraftApp, ctx: &egui::Context, zoom: f32) 
         let ctx = ui.ctx();
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
         let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(rect);
-        let xf = ViewXform { rect, zoom, center: [60.0, 30.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let xf = ViewXform { rect, zoom, center: [60.0, 30.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
         draw_drag_preview(app, &painter, &xf);
     });
     let egui::FullOutput { mut textures_delta, shapes, .. } = out;
@@ -2903,7 +2903,7 @@ fn a_hundred_percent_is_one_physical_pixel_per_document_pixel() {
 fn wheel_anchor_is_the_pointer_over_the_image_and_the_nearest_image_point_off_it() {
     let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
     for (rotation, flip) in [(0.0, false), (30.0, false), (90.0, true)] {
-        let xf = ViewXform { rect, zoom: 0.5, center: [400.0, 300.0], flip, rotation, aspect: 1.0 };
+        let xf = ViewXform { rect, zoom: 0.5, center: [400.0, 300.0], flip, flip_vertical: false, rotation, aspect: 1.0 };
         let inside = xf.to_screen(100.0, 200.0);
         assert_eq!(wheel_anchor(&xf, inside, [800, 600]), inside);
         for (p, want) in [((-300.0, -200.0), [0.0, 0.0]), ((1200.0, 300.0), [800.0, 300.0]), ((400.0, 900.0), [400.0, 600.0])] {
@@ -2912,7 +2912,7 @@ fn wheel_anchor_is_the_pointer_over_the_image_and_the_nearest_image_point_off_it
         }
     }
     let p = pos2(5.0, 5.0);
-    let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     assert_eq!(wheel_anchor(&xf, p, [0, 0]), p, "no document: the pointer");
 }
 
@@ -2922,12 +2922,12 @@ fn zoom_about_centres_the_clicked_point_with_the_preference() {
     let p = pos2(600.0, 200.0);
     for ppp in [1.0f32, 2.0] {
         // `View::zoom` is physical; the transform works in points.
-        let xf = ViewXform { rect, zoom: 1.0 / ppp, center: [400.0, 300.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let xf = ViewXform { rect, zoom: 1.0 / ppp, center: [400.0, 300.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
         let doc = xf.to_doc(p);
         // Off: the document point under the pointer stays under it.
         let mut view = View { zoom: 1.0, center: [400.0, 300.0], ..Default::default() };
         zoom_about(&mut view, &xf, p, 2.0, false, ppp);
-        let after = ViewXform { rect, zoom: 2.0 / ppp, center: view.center, flip: false, rotation: 0.0, aspect: 1.0 };
+        let after = ViewXform { rect, zoom: 2.0 / ppp, center: view.center, flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
         let s = after.to_screen(doc[0] as f32, doc[1] as f32);
         assert!((s - p).length() < 0.5, "ppp {ppp}: {s:?} vs {p:?}");
         // On: the clicked point is the view centre.

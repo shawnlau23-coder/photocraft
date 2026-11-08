@@ -64,7 +64,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     app.sync_views();
     let Some(doc_size) = app.session.active().map(|st| [st.doc.size.width as f32, st.doc.size.height as f32]) else { return false };
-    let (ppp, aspect, flip, overscroll) = (app.ppp, app.ui.view.display_aspect(), app.canvas_flip_horizontal(), app.session.prefs().tools.overscroll);
+    let (ppp, aspect, flip, flip_vertical, overscroll) = (app.ppp, app.ui.view.display_aspect(), app.canvas_flip_horizontal(), app.canvas_flip_vertical(), app.session.prefs().tools.overscroll);
     let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
     let Some(view) = app.ui.views.get_mut(i) else { return false };
     let zoom = view.zoom / ppp;
@@ -76,7 +76,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     for p in presses {
         match p {
             PageKey::Scroll(d) => {
-                let xf = crate::canvas::ViewXform { rect, zoom, center: view.center, flip, rotation: view.rotation, aspect };
+                let xf = crate::canvas::ViewXform { rect, zoom, center: view.center, flip, flip_vertical, rotation: view.rotation, aspect };
                 let d = xf.unmap_vec(d) / zoom;
                 if d.is_finite() {
                     view.center[0] += d.x;
@@ -86,7 +86,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
             PageKey::Corner { end } => {
                 // The document corner goes to the canvas corner the document runs on from: the
                 // top-left one in an upright view, another when it is rotated or flipped.
-                let xf = crate::canvas::ViewXform { rect, zoom, center: view.center, flip, rotation: view.rotation, aspect };
+                let xf = crate::canvas::ViewXform { rect, zoom, center: view.center, flip, flip_vertical, rotation: view.rotation, aspect };
                 let [w, h] = doc_size;
                 let (corner, inward) = if end { ([w, h], vec2(-1.0, -1.0)) } else { ([0.0, 0.0], vec2(1.0, 1.0)) };
                 let dir = xf.map_vec(inward);
@@ -173,7 +173,7 @@ mod tests {
             app.ui.views[0].flip_horizontal = flip;
             for (key, corner, inward) in [(Key::Home, [0.0, 0.0], 1.0), (Key::End, [2000.0, 2000.0], -1.0)] {
                 let center = press(&mut app, key, Modifiers::NONE);
-                let xf = crate::canvas::ViewXform { rect, zoom: 4.0, center, flip, rotation, aspect: 1.0 };
+                let xf = crate::canvas::ViewXform { rect, zoom: 4.0, center, flip, flip_vertical: false, rotation, aspect: 1.0 };
                 let at = xf.to_screen(corner[0], corner[1]);
                 let on_corner = [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()].iter().any(|c| c.distance(at) < 1e-2);
                 assert!(on_corner, "{key:?} at {rotation}° flip {flip}: {at:?} in {rect:?}");

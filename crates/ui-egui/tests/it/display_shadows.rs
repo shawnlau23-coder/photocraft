@@ -249,6 +249,7 @@ fn compare_display_paths_24mp() {
         center: [SIZE[0] as f32 / 2.0, SIZE[1] as f32 / 2.0],
         rotation: 0.0,
         flip: false,
+        flip_vertical: false,
         shadow: false,
         pixel_grid: false,
         view_key: 0,

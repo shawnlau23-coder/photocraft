@@ -114,7 +114,7 @@ fn view_xform_identity_matches_unrotated_mapping() {
         for center in [[0.0, 0.0], [320.0, 240.0], [10.0, -4.0]] {
             for flip in [false, true] {
                 let rect = Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0));
-                let a = ViewXform { rect, zoom, center, flip, rotation: 0.0, aspect: 1.0 };
+                let a = ViewXform { rect, zoom, center, flip, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
                 let sx = if flip { -1.0 } else { 1.0 };
                 let want = rect.center() + vec2((10.0 - center[0]) * zoom * sx, (20.0 - center[1]) * zoom);
                 let got = a.to_screen(10.0, 20.0);
@@ -129,21 +129,21 @@ fn view_xform_roundtrip_and_ninety_degrees() {
     let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0));
     for rot in [15.0, 90.0, -45.0, 180.0] {
         for flip in [false, true] {
-            let xf = ViewXform { rect, zoom: 2.0, center: [80.0, 40.0], flip, rotation: rot, aspect: 1.0 };
+            let xf = ViewXform { rect, zoom: 2.0, center: [80.0, 40.0], flip, flip_vertical: false, rotation: rot, aspect: 1.0 };
             let s = xf.to_screen(10.0, 20.0);
             let d = xf.to_doc(s);
             assert!((d[0] - 10.0).abs() < 1e-3 && (d[1] - 20.0).abs() < 1e-3, "rot={rot} flip={flip} {d:?}");
         }
     }
     // 90°: a point on +X in document space lands on +Y on screen (Y-down = clockwise).
-    let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: false, rotation: 90.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: false, flip_vertical: false, rotation: 90.0, aspect: 1.0 };
     let s = xf.to_screen(1.0, 0.0);
     let c = rect.center();
     assert!((s.x - c.x).abs() < 1e-3 && (s.y - (c.y + 1.0)).abs() < 1e-3, "{s:?} vs {c:?}");
     // Flip after rotate: 0° +X goes left.
-    let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: true, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: true, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     assert!(xf.to_screen(1.0, 0.0).x < rect.center().x);
-    let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: true, rotation: 90.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 1.0, center: [0.0, 0.0], flip: true, flip_vertical: false, rotation: 90.0, aspect: 1.0 };
     let s = xf.to_screen(1.0, 0.0);
     assert!((s.x - c.x).abs() < 1e-3 && (s.y - (c.y + 1.0)).abs() < 1e-3, "flip then rotate {s:?}");
 }
@@ -152,7 +152,7 @@ fn view_xform_roundtrip_and_ninety_degrees() {
 fn followed_angle(h: &Harness<'static, PhotocraftApp>, p0: Pos2, start_rotation: f32) -> f32 {
     let st = h.state();
     let (rect, v, flip) = (st.last_canvas_rect, &st.ui.views[0], st.canvas_flip_horizontal());
-    let before = ViewXform { rect, zoom: 1.0, center: v.center, flip, rotation: start_rotation, aspect: 1.0 };
+    let before = ViewXform { rect, zoom: 1.0, center: v.center, flip, flip_vertical: false, rotation: start_rotation, aspect: 1.0 };
     let d = before.to_doc(p0);
     let after = ViewXform { rotation: v.rotation, ..before };
     let s = after.to_screen(d[0] as f32, d[1] as f32) - rect.center();
@@ -351,7 +351,7 @@ fn rotated_view_keeps_engine_selection_in_document_space() {
     // Axis-aligned in the file: the outline is drawn rotated via ViewXform.
     assert!(b.width() >= 40 && b.height() >= 10, "{b:?}");
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [100.0, 50.0], flip: false, rotation: 30.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [100.0, 50.0], flip: false, flip_vertical: false, rotation: 30.0, aspect: 1.0 };
     let a = xf.to_screen(10.0, 20.0);
     let c = xf.to_screen(50.0, 20.0);
     let v = c - a;

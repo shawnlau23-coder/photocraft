@@ -273,7 +273,7 @@ fn overlay_shapes(app: &PhotocraftApp, ctx: &egui::Context) -> usize {
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
         let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(rect);
-        let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
         draw_overlay(app, &painter, &xf, &doc);
     });
     out.textures_delta.clear();
@@ -718,6 +718,7 @@ fn an_unclosed_path_stays_with_its_document() {
             zoom: 1.0,
             center: [100.0, 75.0],
             flip: false,
+            flip_vertical: false,
             rotation: 0.0,
             aspect: 1.0,
         };
@@ -758,7 +759,7 @@ fn pen_overlay_uses_the_view_document_even_during_direct_selection() {
     app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
     let other = app.session.active().unwrap().doc.clone();
     let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let shapes = |app: &PhotocraftApp, doc: &Document, modifiers| {
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(egui::RawInput { events: vec![egui::Event::ModifiersChanged(modifiers)], ..Default::default() }, |ui| {

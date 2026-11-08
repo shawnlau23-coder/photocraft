@@ -141,7 +141,7 @@ mod tests {
     use egui::{Rect, pos2};
 
     fn view(rotation: f32, flip: bool, aspect: f32) -> ViewXform {
-        ViewXform { rect: Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(400.0, 300.0)), zoom: 2.0, center: [50.0, 40.0], flip, rotation, aspect }
+        ViewXform { rect: Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(400.0, 300.0)), zoom: 2.0, center: [50.0, 40.0], flip, flip_vertical: false, rotation, aspect }
     }
 
     fn close(a: Vec2, b: Vec2) -> bool {

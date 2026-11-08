@@ -243,6 +243,7 @@ fn hit_testing_a_turned_frame_uses_its_own_axes() {
     assert_eq!(resize_icon(1, 0, 0.0, false), CursorIcon::ResizeHorizontal);
     assert_eq!(resize_icon(1, 0, 90.0, false), CursorIcon::ResizeVertical);
     assert_eq!(resize_icon(1, 0, 45.0, false), CursorIcon::ResizeNwSe);
+    assert_eq!(resize_icon(1, 0, 45.0, true), CursorIcon::ResizeNeSw);
     assert_eq!(resize_icon(-1, -1, 90.0, false), CursorIcon::ResizeNeSw);
     assert_eq!(normalized_angle(540.0), 180.0);
     assert_eq!(normalized_angle(-190.0), 170.0);
@@ -448,7 +449,7 @@ fn space_on_the_canvas_moves_the_frame_not_the_view() {
         zoom_anchor: None,
         display_camera: None,
         zoom_transition: None,
-        flip_horizontal: false,
+        flip_horizontal: false, flip_vertical: false,
     };
     a.ui.views = vec![view.clone()];
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(

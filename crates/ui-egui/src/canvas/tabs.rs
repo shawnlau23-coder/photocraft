@@ -777,7 +777,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         crate::shortcuts::document_window_view_keys(app, ui.ctx());
                     }
                     let camera = app.ui.views[w.document].clone();
-                    let mut view = canvas_view(app, ui, w.document, rect, camera, focused);
+                    let mut view = canvas_view(app, ui, w.document, rect, camera, false);
                     // Zoom Resizes Windows keeps this window's camera local too.
                     crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
                     app.ui.views[w.document] = view;

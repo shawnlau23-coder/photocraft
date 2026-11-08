@@ -39,6 +39,7 @@ fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
         zoom: v.zoom,
         center: v.center,
         flip: app.canvas_flip_horizontal(),
+        flip_vertical: app.canvas_flip_vertical(),
         rotation: v.rotation,
         aspect: app.ui.view.display_aspect(),
     };
@@ -103,6 +104,8 @@ fn alt_click_with_the_brush_samples_the_foreground() {
     let mut h = harness(two_colours());
     h.state_mut().ui.tool = Tool::Brush;
     h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
+    h.state_mut().ui.views[0].flip_vertical = true;
+    h.step();
     let rev = h.state().session.active().unwrap().revision;
     click(&mut h, 50.0, 50.0, Modifiers::ALT);
     assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "⌥-click sampled red");

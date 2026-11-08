@@ -232,6 +232,7 @@ fn color_sampler_tool_places_moves_and_removes_points() {
         zoom: 1.0,
         center: [100.0, 50.0],
         flip: false,
+        flip_vertical: false,
         rotation: 0.0,
         aspect: 1.0,
     };

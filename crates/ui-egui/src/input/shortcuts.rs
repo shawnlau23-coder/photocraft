@@ -192,9 +192,9 @@ pub(crate) fn document_window_view_keys(app: &mut PhotocraftApp, ctx: &egui::Con
             let egui::Event::Key { key, modifiers, pressed: true, .. } = event else { return true };
             let matched = bindings.iter().find(|(_, sc)| focus.allows(sc) && key_matches(sc, *key, *modifiers));
             if let Some((id, _)) = matched
-                && matches!(id.as_str(), "view.zoomIn" | "view.zoomOut" | "view.flipHorizontal")
+                && PhotocraftApp::secondary_view_command(id)
             {
-                if id != "view.flipHorizontal" || app.flip_enabled() {
+                if !matches!(id.as_str(), "view.flipHorizontal" | "view.flipVertical") || app.flip_enabled() {
                     commands.push(id.clone());
                 }
                 return false;
@@ -509,6 +509,9 @@ pub(crate) fn handle_forwarded(app: &mut PhotocraftApp, ctx: &egui::Context, eve
 /// once the main window or no window of the app has the keyboard, or one of its widgets takes
 /// keyboard focus, so the keys count as released then.
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.ui.focused_window.is_some() && !ctx.input(|i| i.focused) {
+        return;
+    }
     let held = !ctx.input(|i| i.focused) && crate::panel_docking::other_window_keyboard(ctx) == Some(false);
     if !held {
         ctx.data_mut(|d| d.remove_temp::<std::collections::BTreeSet<Key>>(forwarded_down_id()));

@@ -38,6 +38,7 @@ pub struct Layout {
     pub bars: f32,
     /// View › Flip Horizontal.
     pub flip: bool,
+    pub flip_vertical: bool,
     /// The size of the screen the window is on, in points, when the platform reports it.
     pub monitor: Option<Vec2>,
 }
@@ -89,6 +90,7 @@ pub fn wrapped_center(view: &View, layout: &Layout) -> Option<[f32; 2]> {
         zoom: view.zoom / layout.ppp,
         center: middle,
         flip: layout.flip,
+        flip_vertical: layout.flip_vertical,
         rotation: view.rotation,
         aspect: layout.aspect,
     };
@@ -147,6 +149,7 @@ pub fn follow(
         chrome: rect.size() - crate::rulers::content_rect(app, rect).size(),
         bars: if app.ui.view.shows_scrollbars() { crate::scrollbars::THICKNESS } else { 0.0 },
         flip: after.flip_horizontal,
+        flip_vertical: after.flip_vertical,
         monitor: ctx.input(|i| i.viewport().monitor_size),
     };
     let on = app.session.prefs().general.zoom_resizes_windows && !pinned;
@@ -171,7 +174,7 @@ mod tests {
     }
 
     fn layout() -> Layout {
-        Layout { ppp: 1.0, aspect: 1.0, chrome: Vec2::ZERO, bars: 0.0, flip: false, monitor: Some(vec2(1920.0, 1080.0)) }
+        Layout { ppp: 1.0, aspect: 1.0, chrome: Vec2::ZERO, bars: 0.0, flip: false, flip_vertical: false, monitor: Some(vec2(1920.0, 1080.0)) }
     }
 
     #[test]
@@ -304,6 +307,7 @@ mod tests {
             zoom: view.zoom / layout.ppp,
             center: view.center,
             flip: layout.flip,
+            flip_vertical: layout.flip_vertical,
             rotation: view.rotation,
             aspect: layout.aspect,
         };
@@ -327,7 +331,7 @@ mod tests {
         for layout in [
             layout(),
             Layout { bars: 12.0, chrome: vec2(16.0, 16.0), ..layout() },
-            Layout { bars: 12.0, flip: true, ..layout() },
+            Layout { bars: 12.0, flip: true, flip_vertical: false, ..layout() },
             Layout { bars: 12.0, ppp: 2.0, aspect: 1.5, ..layout() },
         ] {
             for rotation in [0.0, 90.0, -30.0] {

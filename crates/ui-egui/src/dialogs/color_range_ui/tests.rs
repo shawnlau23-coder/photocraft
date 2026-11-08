@@ -357,7 +357,9 @@ fn preview_mode_is_view_state_and_cancel_preserves_selection() {
         let painter = h.ctx.layer_painter(egui::LayerId::background());
         let doc = h.state().session.active().unwrap().doc.id;
         let ctx = h.ctx.clone();
-        paint_selection_preview(h.state_mut(), &ctx, &painter, doc, Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0)), false);
+        let xf = crate::canvas::ViewXform::active(h.state()).unwrap();
+        let bounds = h.state().session.active().unwrap().doc.bounds();
+        paint_selection_preview(h.state_mut(), &ctx, &painter, doc, &xf, bounds);
         let st = h.state().session.active().unwrap();
         assert_eq!((st.revision, st.history.past_len()), (revision, past));
         assert_eq!(coverage(h.state(), 2, 22), 1.0);
@@ -366,7 +368,9 @@ fn preview_mode_is_view_state_and_cancel_preserves_selection() {
     let painter = h.ctx.layer_painter(egui::LayerId::background());
     let ctx = h.ctx.clone();
     let doc = h.state().session.active().unwrap().doc.id;
-    paint_selection_preview(h.state_mut(), &ctx, &painter, doc, Rect::EVERYTHING, false);
+    let xf = crate::canvas::ViewXform::active(h.state()).unwrap();
+    let bounds = h.state().session.active().unwrap().doc.bounds();
+    paint_selection_preview(h.state_mut(), &ctx, &painter, doc, &xf, bounds);
     assert_eq!(coverage(h.state(), 2, 22), 1.0);
 }
 

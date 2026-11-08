@@ -56,6 +56,7 @@ fn xf(h: &Harness<'static, PhotocraftApp>) -> ViewXform {
         zoom: v.zoom,
         center: v.center,
         flip: false,
+        flip_vertical: false,
         rotation: v.rotation,
         aspect: app.ui.view.display_aspect(),
     }

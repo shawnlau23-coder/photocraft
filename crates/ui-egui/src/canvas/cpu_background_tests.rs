@@ -15,6 +15,7 @@ fn cpu_canvas_omits_only_a_checker_hidden_by_an_opaque_texture() {
                     zoom: 1.0,
                     center: [50.0, 40.0],
                     flip: false,
+                    flip_vertical: false,
                     rotation: if rotated { 23.0 } else { 0.0 },
                     aspect: 1.0,
                 };
@@ -130,6 +131,7 @@ fn omitting_an_occluded_checker_preserves_cpu_canvas_pixels() {
     {
         h.state_mut().ui.views[0].rotation = rotation;
         h.state_mut().ui.views[0].flip_horizontal = flip;
+        h.state_mut().ui.views[0].flip_vertical = pattern || flip;
         h.state_mut().ui.view.pattern_preview = pattern;
         reference_frame(&mut h);
         let reference = h.render().unwrap();

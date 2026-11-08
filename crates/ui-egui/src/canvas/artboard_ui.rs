@@ -239,6 +239,7 @@ mod tests {
             zoom: 1.0,
             center: [50.0, 25.0],
             flip: false,
+            flip_vertical: false,
             rotation: 0.0,
             aspect: 1.0,
         };
@@ -263,6 +264,7 @@ mod tests {
             zoom: 1.0,
             center: [50.0, 25.0],
             flip: false,
+            flip_vertical: false,
             rotation: 0.0,
             aspect: 1.0,
         };
@@ -289,6 +291,7 @@ mod tests {
             zoom: 1.0,
             center: [50.0, 25.0],
             flip: false,
+            flip_vertical: false,
             rotation: 0.0,
             aspect: 1.0,
         };
@@ -322,6 +325,7 @@ mod tests {
             zoom: 1.0,
             center: [50.0, 25.0],
             flip: true,
+            flip_vertical: false,
             rotation: 45.0,
             aspect: 1.0,
         };

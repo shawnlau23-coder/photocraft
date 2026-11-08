@@ -819,14 +819,20 @@ fn secondary_gpu_refreshes_divergent_settings_and_shared_paint() {
     app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().view.flip_horizontal = false;
     canvas_pass(app);
     assert_eq!(gpu.read_texels(output(a)).unwrap(), marked, "a camera-only flip must not refresh the output");
+    app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().view.flip_vertical = true;
+    canvas_pass(app);
+    assert_eq!(gpu.read_texels(output(a)).unwrap(), marked, "vertical flip must reuse the output");
     app.ui.views[0].flip_horizontal = true;
+    app.ui.views[0].flip_vertical = true;
     app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().follow_main_flip = true;
     canvas_pass(app);
     assert_eq!(gpu.read_texels(output(a)).unwrap(), marked, "following Main must also reuse the output");
     let child = app.ui.windows.iter_mut().find(|w| w.id == a).unwrap();
     assert!(!child.view.flip_horizontal);
+    assert!(child.view.flip_vertical);
     child.follow_main_flip = false;
     app.ui.views[0].flip_horizontal = false;
+    app.ui.views[0].flip_vertical = false;
     gpu.discard_output(output(a));
 
     let pa = draw(app, a);
@@ -850,6 +856,7 @@ fn secondary_gpu_refreshes_divergent_settings_and_shared_paint() {
     assert_ne!(draw(app, b), prior_b);
 
     let b_after_paint = draw(app, b);
+    app.ui.views[0].flip_vertical = false;
     gpu.discard_output(output(a));
     gpu.fail_next_secondary_allocation();
     draw(app, a); // The CPU fallback must publish A's composite to A's texture.

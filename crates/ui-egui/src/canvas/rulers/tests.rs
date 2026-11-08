@@ -13,7 +13,7 @@ fn ruler_ticks_labels_and_pointer_stay_out_of_the_origin_corner() {
             let mut h = builder.build_ui_state(
                 move |ui, app| {
                     let rect = Rect::from_min_max(full.min + vec2(RULER, RULER), full.max);
-                    let xf = ViewXform { rect, zoom, center: [(width - 80.0) / 2.0, 160.0], flip, rotation, aspect: 1.0 };
+                    let xf = ViewXform { rect, zoom, center: [(width - 80.0) / 2.0, 160.0], flip, flip_vertical: false, rotation, aspect: 1.0 };
                     draw_rulers(app, ui, full, &xf);
                 },
                 app,
@@ -78,7 +78,7 @@ fn shift_snaps_the_zero_point_to_ruler_ticks_from_the_current_origin() {
 fn ruler_harness(app: PhotocraftApp) -> (egui_kittest::Harness<'static, PhotocraftApp>, Rect, ViewXform) {
     let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0));
     let rect = Rect::from_min_max(full.min + vec2(RULER, RULER), full.max);
-    let xf = ViewXform { rect, zoom: 1.0, center: [128.0, 64.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 1.0, center: [128.0, 64.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let h = egui_kittest::Harness::builder()
         .with_size(vec2(400.0, 300.0))
         .with_step_dt(1.0 / 60.0)
@@ -278,7 +278,7 @@ fn canvas_at(h: &AppHarness, x: f32, y: f32) -> Pos2 {
     let app = h.state();
     let v = &app.ui.views[0];
     let rect = content_rect(app, app.last_canvas_rect);
-    ViewXform { rect, zoom: v.zoom, center: v.center, flip: false, rotation: 0.0, aspect: 1.0 }.to_screen(x, y)
+    ViewXform { rect, zoom: v.zoom, center: v.center, flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 }.to_screen(x, y)
 }
 
 /// Moving a horizontal guide with the Move tool on the real canvas: `Y:` follows the pointer.
@@ -526,7 +526,7 @@ fn rotated_view_keeps_full_rulers() {
     let (a, b) = (rect.left_top(), rect.right_top());
     for rotation in [0.0f32, 30.0, 45.0, 90.0, -119.0, 180.0] {
         for flip in [false, true] {
-            let xf = ViewXform { rect, zoom: 0.5, center: [1000.0, 700.0], flip, rotation, aspect: 1.0 };
+            let xf = ViewXform { rect, zoom: 0.5, center: [1000.0, 700.0], flip, flip_vertical: false, rotation, aspect: 1.0 };
             let (u0, u1) = ruler_range(&xf, a, b, 0, 1.0, [0.0; 2]);
             assert!((u1 - u0 - 1600.0).abs() < 1e-2, "rotation {rotation}: top ruler covers {u0}..{u1}");
             let (first, last) = if flip { (u1, u0) } else { (u0, u1) };
@@ -542,7 +542,7 @@ fn rotated_view_keeps_full_rulers() {
         }
     }
     // Distances left of / above the origin read without a minus sign, as in Photoshop.
-    let xf = ViewXform { rect, zoom: 0.5, center: [0.0, 0.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 0.5, center: [0.0, 0.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let (u0, u1) = ruler_range(&xf, a, b, 0, 1.0, [0.0; 2]);
     assert!(u0 < -500.0 && u1 > 500.0, "the view spans the origin: {u0}..{u1}");
     for (step, whole) in [(100.0, true), (100.0, false), (0.25, false)] {
@@ -566,7 +566,7 @@ fn rulers_count_from_the_zero_point_on_a_rotated_view() {
     let zero = [300.0, 120.0];
     for rotation in [0.0f32, 30.0, 90.0, -119.0] {
         for flip in [false, true] {
-            let xf = ViewXform { rect, zoom: 0.5, center: [1000.0, 700.0], flip, rotation, aspect: 1.0 };
+            let xf = ViewXform { rect, zoom: 0.5, center: [1000.0, 700.0], flip, flip_vertical: false, rotation, aspect: 1.0 };
             let at = xf.to_screen(zero[0] as f32, zero[1] as f32);
             assert!((ruler_pos(&xf, false, 0.0, 1.0, zero) - at.x).abs() < 1e-2, "rotation {rotation}: top ruler 0");
             assert!((ruler_pos(&xf, true, 0.0, 1.0, zero) - at.y).abs() < 1e-2, "rotation {rotation}: left ruler 0");
@@ -577,7 +577,7 @@ fn rulers_count_from_the_zero_point_on_a_rotated_view() {
         }
     }
     // Unrotated, ruler value u sits over document x = zero + u.
-    let xf = ViewXform { rect, zoom: 0.5, center: [1000.0, 700.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 0.5, center: [1000.0, 700.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     assert!((ruler_pos(&xf, false, -300.0, 1.0, zero) - xf.to_screen(0.0, 0.0).x).abs() < 1e-2);
     assert!((ruler_pos(&xf, true, 80.0, 1.0, zero) - xf.to_screen(0.0, 200.0).y).abs() < 1e-2);
 }
@@ -587,7 +587,7 @@ fn rulers_count_from_the_zero_point_on_a_rotated_view() {
 #[test]
 fn guides_turn_with_a_rotated_view() {
     let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
-    let level = ViewXform { rect, zoom: 0.5, center: [1000.0, 700.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let level = ViewXform { rect, zoom: 0.5, center: [1000.0, 700.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let [a, b] = guide_segment(&level, rect, true, 500.0);
     assert!((a.x - b.x).abs() < 1e-3 && (a.y - rect.top()).abs() < 1e-3 && (b.y - rect.bottom()).abs() < 1e-3, "{a:?} {b:?}");
     for rotation in [30.0f32, 90.0, -119.0] {
@@ -608,10 +608,10 @@ fn guides_turn_with_a_rotated_view() {
 fn guide_cursors_turn_with_a_rotated_view() {
     use egui::CursorIcon::{ResizeHorizontal as H, ResizeNeSw as NeSw, ResizeNwSe as NwSe, ResizeVertical as V};
     let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
-    let level = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let level = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     // View rotation, flip → the cursor over a vertical guide, over a horizontal guide.
     for (rotation, flip, want) in [(0.0, false, [H, V]), (90.0, false, [V, H]), (45.0, false, [NwSe, NeSw]), (0.0, true, [H, V])] {
-        let xf = ViewXform { rotation, flip, ..level };
+        let xf = ViewXform { rotation, flip, flip_vertical: false, ..level };
         assert_eq!([guide_cursor(&xf, true), guide_cursor(&xf, false)], want, "view turned {rotation}°, flip {flip}");
     }
 }
@@ -624,7 +624,7 @@ fn ruler_range_is_normalised_when_flipped() {
     let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
     let top = Rect::from_min_size(rect.min, vec2(rect.width(), RULER));
     for flip in [false, true] {
-        let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip, rotation: 0.0, aspect: 1.0 };
+        let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
         let (u0, u1) = ruler_range(&xf, top.left_top(), top.right_top(), 0, 1.0, [0.0; 2]);
         assert!(u0 <= u1, "flip={flip}: u0 ({u0}) must be <= u1 ({u1})");
         assert!(u1 - u0 > 0.0, "flip={flip}: range is empty");
@@ -637,7 +637,7 @@ fn ruler_range_is_normalised_when_flipped() {
 fn alt_drags_a_guide_of_the_other_orientation_out_of_a_ruler() {
     let full = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
     let rect = Rect::from_min_max(full.min + vec2(RULER, RULER), full.max);
-    let xf = ViewXform { rect, zoom: 1.0, center: [128.0, 64.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 1.0, center: [128.0, 64.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let drag = |from: Pos2, modifiers: egui::Modifiers| {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 256, "height": 128})).unwrap();
@@ -789,6 +789,7 @@ fn a_guide_dragged_onto_a_ruler_is_deleted_through_the_canvas() {
                 zoom: v.zoom,
                 center: v.center,
                 flip: app.canvas_flip_horizontal(),
+                flip_vertical: app.canvas_flip_vertical(),
                 rotation: v.rotation,
                 aspect: app.ui.view.display_aspect(),
             };
@@ -830,7 +831,7 @@ fn a_guide_dragged_onto_a_ruler_is_deleted_through_the_canvas() {
 fn shift_dragged_guides_land_on_ruler_ticks() {
     let full = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
     let rect = Rect::from_min_max(full.min + vec2(RULER, RULER), full.max);
-    let xf = ViewXform { rect, zoom: 1.0, center: [128.0, 64.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 1.0, center: [128.0, 64.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let new_app = || {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 256, "height": 128})).unwrap();
@@ -876,7 +877,7 @@ fn shift_dragged_guides_land_on_ruler_ticks() {
 fn alt_turns_a_guide_dragged_out_of_a_ruler() {
     let full = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
     let rect = Rect::from_min_max(full.min + vec2(RULER, RULER), full.max);
-    let xf = ViewXform { rect, zoom: 1.0, center: [128.0, 64.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 1.0, center: [128.0, 64.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 256, "height": 128})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 300.0)).build_ui_state(move |ui, app| draw_rulers(app, ui, full, &xf), app);
@@ -944,7 +945,7 @@ fn alt_turns_a_guide_moved_with_the_move_tool() {
 fn a_guide_dropped_on_either_ruler_is_deleted() {
     let full = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
     let rect = Rect::from_min_max(full.min + vec2(RULER, RULER), full.max);
-    let xf = ViewXform { rect, zoom: 1.0, center: [128.0, 64.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 1.0, center: [128.0, 64.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     for (pointer, over) in [(pos2(RULER / 2.0, 150.0), true), (pos2(200.0, RULER / 2.0), true), (pos2(200.0, 150.0), false)] {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 256, "height": 128})).unwrap();

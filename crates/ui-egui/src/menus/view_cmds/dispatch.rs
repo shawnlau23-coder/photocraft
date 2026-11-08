@@ -50,6 +50,7 @@ pub fn handles(id: &str) -> bool {
             | "view.fitArtboardOnScreen"
             | "window.panel.layerComps"
             | "view.flipHorizontal"
+            | "view.flipVertical"
             | "view.pixelAspectRatioCorrection"
             | "view.patternPreview"
             | "view.pixelArtPreview"
@@ -91,7 +92,7 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
         "view.layerVisibility" | "view.layerVisibility.showOnly" | "view.layerOpacity" | "view.layerBlend" | "view.layerAdjustment" => doc,
         "view.screenMode.fullScreen" | "view.screenMode.fullScreenWithMenuBar" => doc,
         "view.twoHundredPercent" | "view.printSize" | "view.fitLayersOnScreen" | "view.rotateView" | "view.resetView" => doc,
-        "view.flipHorizontal" => app.flip_enabled(),
+        "view.flipHorizontal" | "view.flipVertical" => app.flip_enabled(),
         "view.fitArtboardOnScreen" => app.session.active().is_some_and(|d| d.doc.has_artboards()),
         i if i.starts_with("window.arrange.") => match &i["window.arrange.".len()..] {
             "consolidateAllToTabs" => true,
@@ -173,6 +174,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     Some(match id {
         "view.extras" => o.extras,
         "view.flipHorizontal" => app.effective_flip(),
+        "view.flipVertical" => app.effective_flip_axis(true),
         "view.pixelAspectRatioCorrection" => o.pixel_aspect_correction,
         "view.patternPreview" => o.pattern_preview,
         "view.pixelArtPreview" => o.pixel_art_preview,
@@ -395,13 +397,14 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
             o.extras = flag_param(p, o.extras);
             Ok(json!(o.extras))
         }
-        "view.flipHorizontal" => {
+        "view.flipHorizontal" | "view.flipVertical" => {
+            let vertical = id == "view.flipVertical";
             app.session.active().ok_or("no document")?;
-            let flipped = app.effective_flip();
+            let flipped = app.effective_flip_axis(vertical);
             if app.flip_enabled() {
-                app.set_flip(ctx, flag_param(p, flipped));
+                app.set_flip(ctx, vertical, flag_param(p, flipped));
             }
-            Ok(json!(app.effective_flip()))
+            Ok(json!(app.effective_flip_axis(vertical)))
         }
         "view.pixelAspectRatioCorrection" => {
             o.pixel_aspect_correction = flag_param(p, o.pixel_aspect_correction);

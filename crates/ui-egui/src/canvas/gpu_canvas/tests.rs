@@ -409,15 +409,19 @@ fn gpu_view_mirror_samples_the_same_texture_with_pan_rotation_and_clip() {
     let gpu = GpuCanvas::with_tile(&state, Some(64));
     let size = [128, 48];
     let rgba: Vec<u8> = (0..size[0] * size[1])
-        .flat_map(|i| if i % size[0] < 64 { [255, 0, 0, 255] } else { [0, 255, 0, 255] })
+        .flat_map(|i| {
+            let left = i % size[0] < 64;
+            let top = i / size[0] < 24;
+            [if left { 255 } else { 0 }, if left { 0 } else { 255 }, if top { 255 } else { 0 }, 255]
+        })
         .collect();
     gpu.upload_full(1u64, size, &rgba);
     let rect = Rect::from_min_size(Pos2::ZERO, vec2(256.0, 192.0));
     let clip = Rect::from_min_max(Pos2::new(30.0, 12.0), Pos2::new(230.0, 170.0));
-    let xf = ViewXform { rect, zoom: 1.5, center: [55.25, 27.75], flip: false, rotation: 27.0, aspect: 1.0 };
+    let xf = ViewXform { rect, zoom: 1.5, center: [55.25, 27.75], flip: false, flip_vertical: false, rotation: 27.0, aspect: 1.0 };
     let params = ViewParams {
         doc: 1u64.into(), doc_size: size, zoom: xf.zoom, center: xf.center,
-        rotation: xf.rotation.to_radians(), flip: false, shadow: false, pixel_grid: false,
+        rotation: xf.rotation.to_radians(), flip: false, flip_vertical: false, shadow: false, pixel_grid: false,
         view_key: 1, display: 0, output: 0, hdr: None, offset: [0.0, 0.0],
     };
     let renderer = egui_kittest::wgpu::WgpuTestRenderer::from_render_state(state);
@@ -427,18 +431,19 @@ fn gpu_view_mirror_samples_the_same_texture_with_pan_rotation_and_clip() {
         .renderer(renderer)
         .build_ui_state(move |ui, params| GpuCanvas::paint(&ui.painter().with_clip_rect(clip), rect, *params), params);
 
-    for flip in [false, true] {
+    for (flip, flip_vertical) in [(false, false), (true, false), (false, true), (true, true)] {
         harness.state_mut().flip = flip;
+        harness.state_mut().flip_vertical = flip_vertical;
         harness.run_steps(1);
         let image = harness.render().unwrap();
-        let xf = ViewXform { flip, ..xf };
-        for (x, want) in [(24.0, [255, 0, 0]), (94.0, [0, 255, 0])] {
-            let at = xf.to_screen(x, 23.0);
+        let xf = ViewXform { flip, flip_vertical, ..xf };
+        for (x, y, want) in [(24.0, 12.0, [255, 0, 255]), (94.0, 12.0, [0, 255, 255]), (24.0, 35.0, [255, 0, 0]), (94.0, 35.0, [0, 255, 0])] {
+            let at = xf.to_screen(x, y);
             assert!(clip.contains(at));
             let px = image.get_pixel(at.x as u32, at.y as u32).0;
             assert_eq!(&px[..3], &want, "flip={flip}, point={at:?}");
             let doc = xf.to_doc(at);
-            assert!((doc[0] - f64::from(x)).abs() < 0.001 && (doc[1] - 23.0).abs() < 0.001);
+            assert!((doc[0] - f64::from(x)).abs() < 0.001 && (doc[1] - f64::from(y)).abs() < 0.001);
         }
         let outside = image.get_pixel(10, 96).0;
         assert_ne!(&outside[..3], &[255, 0, 0]);

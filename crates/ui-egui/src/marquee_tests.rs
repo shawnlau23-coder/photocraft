@@ -52,6 +52,7 @@ fn view_xform(h: &Harness<'static, PhotocraftApp>) -> ViewXform {
         zoom: v.zoom,
         center: v.center,
         flip: app.canvas_flip_horizontal(),
+        flip_vertical: app.canvas_flip_vertical(),
         rotation: v.rotation,
         aspect: app.ui.view.display_aspect(),
     }
@@ -412,6 +413,7 @@ fn the_live_outline_matches_the_committed_selection_in_a_rotated_view() {
         let mut h = harness(tool);
         let v = &mut h.state_mut().ui.views[0];
         v.rotation = 30.0;
+        v.flip_vertical = true;
         h.run_steps(2);
         press_at(&mut h, 50.0, 50.0, Modifiers::NONE);
         move_to(&mut h, 150.0, 90.0);

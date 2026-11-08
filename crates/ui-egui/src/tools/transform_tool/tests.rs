@@ -1426,6 +1426,7 @@ fn the_box_is_the_selection_and_the_ants_follow_it() {
         zoom: 2.0,
         center: [32.0, 32.0],
         flip: false,
+        flip_vertical: false,
         rotation: 0.0,
         aspect: 1.0,
     };
@@ -1478,6 +1479,7 @@ fn the_ants_follow_a_warp_and_stop_at_a_distorts_horizon() {
         zoom: 2.0,
         center: [32.0, 32.0],
         flip: false,
+        flip_vertical: false,
         rotation: 0.0,
         aspect: 1.0,
     };
@@ -1732,7 +1734,7 @@ fn warp_split_cursors_turn_with_the_grid_and_the_view() {
     use CursorIcon::{ResizeHorizontal as H, ResizeNeSw as NeSw, ResizeNwSe as NwSe, ResizeVertical as V};
     let rect = [0.0, 0.0, 200.0, 100.0];
     let screen = egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
-    let level = ViewXform { rect: screen, zoom: 1.0, center: [100.0, 50.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let level = ViewXform { rect: screen, zoom: 1.0, center: [100.0, 50.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     // Grid turned (degrees, about its centre), view rotation → Split Vertically, Split Horizontally.
     for (grid, view, want) in [(0.0, 0.0, [H, V]), (0.0, 90.0, [V, H]), (90.0, 0.0, [V, H]), (45.0, 0.0, [NwSe, NeSw])] {
         let (s, c) = f64::to_radians(grid).sin_cos();
@@ -2245,7 +2247,7 @@ fn preview_pixels_past_the_canvas_are_hidden() {
     let tol = 1e-3;
     for (rotation, flip) in [(0.0, false), (30.0, false), (-75.0, true)] {
         let xf =
-            ViewXform { rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 400.0)), zoom: 2.0, center: [32.0, 32.0], flip, rotation, aspect: 1.0 };
+            ViewXform { rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 400.0)), zoom: 2.0, center: [32.0, 32.0], flip, flip_vertical: false, rotation, aspect: 1.0 };
         let meshes = preview_meshes(&app, &xf);
         let verts: Vec<[f64; 2]> = meshes.iter().flat_map(|m| m.vertices.iter().map(|v| xf.to_doc(v.pos))).collect();
         assert!(!verts.is_empty(), "the preview still draws (rotation {rotation})");
@@ -2265,6 +2267,7 @@ fn preview_pixels_past_the_canvas_are_hidden() {
         zoom: 1.0,
         center: [32.0, 32.0],
         flip: false,
+        flip_vertical: false,
         rotation: 0.0,
         aspect: 1.0,
     };
@@ -2341,6 +2344,7 @@ fn transform_preview_bench() {
                 zoom,
                 center: [3000.0, 2000.0],
                 flip: false,
+                flip_vertical: false,
                 rotation: 0.0,
                 aspect: 1.0,
             };
@@ -2684,6 +2688,7 @@ fn transform_preview_preserves_displayed_profile_colors() {
             zoom: 1.0,
             center: [4.0, 4.0],
             flip: false,
+            flip_vertical: false,
             rotation: 0.0,
             aspect: 1.0,
         };
@@ -2746,6 +2751,7 @@ fn transform_selection_tint_is_not_document_color() {
         zoom: 1.0,
         center: [4.0, 4.0],
         flip: false,
+        flip_vertical: false,
         rotation: 0.0,
         aspect: 1.0,
     };
@@ -2797,6 +2803,7 @@ fn transform_covering_layer_uses_the_same_monitor_profile() {
         zoom: 1.0,
         center: [4.0, 4.0],
         flip: false,
+        flip_vertical: false,
         rotation: 0.0,
         aspect: 1.0,
     };
@@ -2851,7 +2858,7 @@ fn transform_profile_visual_evidence() {
         h.run_steps(8);
         let app = h.state();
         let view = &app.ui.views[0];
-        let xf = ViewXform { rect: app.last_canvas_rect, zoom: view.zoom, center: view.center, flip: false, rotation: 0.0, aspect: 1.0 };
+        let xf = ViewXform { rect: app.last_canvas_rect, zoom: view.zoom, center: view.center, flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
         let points = [100.0, 200.0, 300.0].map(|x| xf.to_screen(x, 100.0) * h.ctx.pixels_per_point());
         let before = h.render().unwrap();
         before.save(std::path::Path::new(&destination).join(format!("{monitor}-before.png"))).unwrap();

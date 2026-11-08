@@ -499,6 +499,7 @@ fn a_curvature_pen_double_click_through_the_canvas_rounds_a_corner() {
             zoom: v.zoom,
             center: v.center,
             flip: false,
+            flip_vertical: false,
             rotation: v.rotation,
             aspect: app.ui.view.display_aspect(),
         };

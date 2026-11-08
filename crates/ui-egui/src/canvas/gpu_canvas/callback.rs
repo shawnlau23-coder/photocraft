@@ -62,7 +62,7 @@ impl CanvasCallback {
         let c = self.rect.center();
         let origin = [c.x * ppp - p.center[0] * scale, c.y * ppp - p.center[1] * scale];
         // Mirrored views already use the pixel-aligned ViewXform from the canvas.
-        (if p.flip { origin } else { origin.map(f32::round) }, scale)
+        (if p.flip || p.flip_vertical { origin } else { origin.map(f32::round) }, scale)
     }
 
     fn uniforms(&self, screen: [u32; 2], ppp: f32, out_linear: bool, style: &CanvasStyle) -> [f32; VIEW_FLOATS] {
@@ -120,7 +120,7 @@ impl CanvasCallback {
             p.center[0],
             p.center[1],
             if p.flip { -1.0 } else { 1.0 },
-            0.0,
+            if p.flip_vertical { -1.0 } else { 1.0 },
             0.0,
             0.0,
         ]
@@ -210,6 +210,12 @@ impl CallbackTrait for CanvasCallback {
                 (2.0 * axis - x1, 2.0 * axis - x0)
             } else {
                 (x0, x1)
+            };
+            let (y0, y1) = if self.params.flip_vertical {
+                let axis = origin[1] + cen[1] * scale;
+                (2.0 * axis - y1, 2.0 * axis - y0)
+            } else {
+                (y0, y1)
             };
             if x1 < cx0 || y1 < cy0 || x0 > cx1 || y0 > cy1 {
                 continue;

@@ -63,7 +63,7 @@ fn alpha(h: &Harness<'static, PhotocraftApp>, x: i32, y: i32) -> f32 {
 #[test]
 fn the_mapping_stretches_document_x_and_inverts_exactly() {
     let rect = Rect::from_min_size(Pos2::new(10.0, 20.0), vec2(800.0, 600.0));
-    let square = ViewXform { rect, zoom: 1.5, center: [100.0, 50.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let square = ViewXform { rect, zoom: 1.5, center: [100.0, 50.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
     let wide = ViewXform { aspect: 2.0, ..square };
     let r = wide.doc_rect(photocraft_geom::Rect::new(0, 0, 200, 100));
     assert!((r.width() - 600.0).abs() < 1e-3 && (r.height() - 150.0).abs() < 1e-3, "{r:?}");
@@ -72,7 +72,7 @@ fn the_mapping_stretches_document_x_and_inverts_exactly() {
     for flip in [false, true] {
         for rotation in [0.0, 30.0, -90.0] {
             for aspect in [0.91, 1.0, 2.0] {
-                let xf = ViewXform { flip, rotation, aspect, ..square };
+                let xf = ViewXform { flip, flip_vertical: false, rotation, aspect, ..square };
                 let p = xf.to_screen(37.0, 81.0);
                 let d = xf.to_doc(p);
                 assert!((d[0] - 37.0).abs() < 1e-3 && (d[1] - 81.0).abs() < 1e-3, "{flip} {rotation} {aspect}: {d:?}");

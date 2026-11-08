@@ -118,6 +118,8 @@ pub struct View {
     /// Display-only reflection, owned by this camera rather than the shared document.
     #[serde(default)]
     pub flip_horizontal: bool,
+    #[serde(default)]
+    pub flip_vertical: bool,
     /// Screen (device) pixels per document pixel: the user-facing zoom (`100%` is `1.0`).
     /// Canvas geometry works in egui points and divides by `ctx.pixels_per_point`
     /// (`PhotocraftApp::point_zoom`), so neither the display scale nor Interface › UI Scale
@@ -173,6 +175,7 @@ impl Default for View {
     fn default() -> Self {
         Self {
             flip_horizontal: false,
+            flip_vertical: false,
             zoom: 1.0,
             center: [0.0, 0.0],
             fit_pending: true,
@@ -196,7 +199,7 @@ pub struct DocWindow {
     pub visibility: crate::view_visibility::Visibility,
     pub id: u64,
     pub document: usize,
-    /// Follow the main camera's reflection while keeping `view.flip_horizontal` as the saved independent orientation.
+    /// Follow the main camera's reflections while keeping both independent flip flags.
     #[serde(default)]
     pub follow_main_flip: bool,
     #[serde(default)]

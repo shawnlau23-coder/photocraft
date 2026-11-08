@@ -31,7 +31,7 @@ pub mod layer_pick_ui;
 pub mod move_ui;
 mod navigator;
 pub mod outline;
-mod paint;
+pub(crate) mod paint;
 pub mod paint_mouse;
 pub mod patch_preview;
 pub mod pattern_preview;
@@ -219,6 +219,7 @@ struct CanvasPaintInput<'a> {
     size: [u32; 2],
     primary: bool,
     flip: bool,
+    flip_vertical: bool,
     aspect: f32,
     render_zoom: f32,
     target_xf: ViewXform,
@@ -352,6 +353,7 @@ fn paint_canvas(
     let size = input.size;
     let primary = input.primary;
     let flip = input.flip;
+    let flip_vertical = input.flip_vertical;
     let aspect = input.aspect;
     let render_zoom = input.render_zoom;
     let target_xf = input.target_xf;
@@ -384,7 +386,7 @@ fn paint_canvas(
     // flip path, and non-square pixels still use the CPU canvas.
     let secondary = app.view_composites.rendering_window;
     let native_canvas = secondary.is_none() || ctx.viewport_id() != egui::ViewportId::ROOT;
-    let gpu_ok = native_canvas && crate::gpu_canvas::gpu_view_ok(flip && secondary.is_none(), view.rotation, aspect);
+    let gpu_ok = native_canvas && crate::gpu_canvas::gpu_view_ok((flip || flip_vertical) && secondary.is_none(), view.rotation, aspect);
     if secondary.is_none() && app.gpu.is_some() {
         if gpu_ok {
             crate::render_path::view_ok(app, doc.id.0);
@@ -416,6 +418,7 @@ fn paint_canvas(
             ],
             rotation: if view.rotation.is_finite() { view.rotation.to_radians() } else { 0.0 },
             flip: secondary.is_some() && flip,
+            flip_vertical: secondary.is_some() && flip_vertical,
             shadow: {
                 let t = crate::theme::Tokens::get(ctx);
                 !t.bevel && !t.pro && drop_shadow
@@ -445,6 +448,7 @@ fn paint_canvas(
             center: xf.center,
             rotation: if view.rotation.is_finite() { view.rotation.to_radians() } else { 0.0 },
             flip: secondary.is_some() && flip,
+            flip_vertical: secondary.is_some() && flip_vertical,
             shadow: {
                 let t = crate::theme::Tokens::get(ctx);
                 !t.bevel && !t.pro && drop_shadow
@@ -520,11 +524,11 @@ fn paint_canvas(
                 Color32::WHITE,
             );
         } else {
-            let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)) };
+            let uv = xf.image_uv();
             painter.image(tex, xf.doc_rect(a), uv, Color32::WHITE);
         }
     }
-    crate::color_range_ui::paint_selection_preview(app, ctx, painter, doc.id, img_rect, flip);
+    crate::color_range_ui::paint_selection_preview(app, ctx, painter, doc.id, &xf, doc.bounds());
     // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
     if doc.has_artboards() {
         let t = crate::theme::Tokens::get(ctx);
@@ -654,7 +658,7 @@ fn update_canvas_navigation(app: &mut PhotocraftApp, view: &mut View, input: Can
         if let Some(delta) = crate::rotate_view::trackpad_delta(input.ctx, rotate_trackpad, touch_gestures) {
             view.zoom_animating = false;
             view.zoom_anchor = None;
-            let next = view.rotation + crate::rotate_view::screen_delta(delta, input.xf.flip);
+            let next = view.rotation + crate::rotate_view::screen_delta(delta, input.xf.reflected());
             if next.is_finite() {
                 view.rotation = crate::rotate_view::wrap_deg(next);
             }
@@ -982,6 +986,47 @@ fn handle_canvas_tool_navigation(
     // Like the Hand, the selected Zoom yields to an open Free Transform box (#4799).
     if tool == Tool::Zoom && !transform_owns_pointer && crate::zoom_tool::drag(app, ctx, view, xf, buttons, response.interact_pointer_pos()) {
         (buttons.started, buttons.dragged, buttons.stopped) = (false, false, false);
+    }
+}
+
+/// Secondary canvases take only navigation and color sampling from the shared tool selection.
+fn handle_secondary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasToolInput<'_>) {
+    let response = input.response;
+    let mods = ui.input(|i| i.modifiers);
+    let mut buttons = crate::paint_mouse::Buttons {
+        started: response.drag_started_by(PointerButton::Primary),
+        dragged: response.dragged_by(PointerButton::Primary),
+        stopped: response.drag_stopped_by(PointerButton::Primary),
+        clicked: response.clicked_by(PointerButton::Primary),
+    };
+    match input.tool {
+        Tool::Zoom | Tool::RotateView if !input.under_dialog => {
+            handle_canvas_tool_navigation(app, ui, view, input, &mut buttons);
+            if input.tool == Tool::Zoom {
+                handle_canvas_tool_clicks(app, ui, view, input, mods, response.id, &buttons);
+            }
+            if response.hovered() {
+                input.ctx.set_cursor_icon(if input.tool == Tool::Zoom {
+                    crate::tool_cursor::zoom(input.ctx, (input.zoom_out)(mods.alt))
+                } else {
+                    crate::rotate_view::cursor(response.dragged())
+                });
+            }
+        }
+        Tool::Hand if response.hovered() => input.ctx.set_cursor_icon(crate::tool_cursor::hand(input.ctx, false)),
+        _ => {
+            let mods = crate::workspace_ui::sticky_mods(app, mods);
+            let temporary = cursors::alt_samples(input.tool, mods) || cursors::alt_loads_mixer(input.tool, mods);
+            if !input.under_dialog && (input.tool == Tool::Eyedropper || temporary)
+                && let Some(p) = response.hover_pos()
+            {
+                input.ctx.set_cursor_icon(pipette_cursor(input.ctx, p));
+                if response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down()) {
+                    let [x, y] = input.xf.to_doc(p);
+                    cursors::sample_eyedropper(app, x, y, if temporary { egui::Modifiers::NONE } else { mods });
+                }
+            }
+        }
     }
 }
 
@@ -1647,6 +1692,7 @@ struct CanvasTailInput<'a> {
     tool: Tool,
     middle: bool,
     flip: bool,
+    flip_vertical: bool,
     aspect: f32,
     bars_id: egui::Id,
     layer_edges: egui::layers::ShapeIdx,
@@ -1666,6 +1712,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     let tool = input.tool;
     let middle = input.middle;
     let flip = input.flip;
+    let flip_vertical = input.flip_vertical;
     let aspect = input.aspect;
     let bars_id = input.bars_id;
     let layer_edges = input.layer_edges;
@@ -1691,7 +1738,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;
     let over_bars = app.ui.view.shows_scrollbars()
-        && crate::scrollbars::show(ui, rect, view, flip, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", idx)));
+        && crate::scrollbars::show(ui, rect, view, flip, flip_vertical, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", idx)));
     ctx.data_mut(|d| d.insert_temp(bars_id, over_bars));
     if view.center != before {
         ctx.request_repaint();
@@ -1798,6 +1845,8 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
 
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
+    let secondary = app.secondary_canvas();
+    let primary = primary && !secondary;
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
     // (`view`) and writes it back at the end; a tool that moves the camera itself meanwhile (the
     // Crop tool's default mode pans and turns the view with the image, `crop_mode`) must not be
@@ -1856,8 +1905,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     update_polygon_camera(app, &ctx, (idx, primary), rect, &mut view, ppp, aspect);
 
     let flip = view.flip_horizontal;
+    let flip_vertical = view.flip_vertical;
     // Document rendering follows the target; only shader uniforms and overlay geometry ease.
-    let target_xf = ViewXform { rect, zoom: view.zoom / ppp, center: view.center, flip, rotation: view.rotation, aspect };
+    let target_xf = ViewXform { rect, zoom: view.zoom / ppp, center: view.center, flip, flip_vertical, rotation: view.rotation, aspect };
     let render_zoom = view.zoom;
     let mut display_view = animated_view(&mut view, target_xf, ppp, app.session.prefs().general.animated_zoom, ctx.input(|i| i.time));
     if primary && let Some(stored) = app.ui.views.get_mut(idx) {
@@ -1895,6 +1945,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         size,
         primary,
         flip,
+        flip_vertical,
         aspect,
         render_zoom,
         target_xf,
@@ -1907,42 +1958,46 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let under_dialog = !app.ui.dialogs.is_empty();
     let free_hover = under_dialog && crate::dialogs::free_pointer_over(&ctx, rect).is_some();
     // A press on the canvas while a tool letter is held makes that tool temporary (#2672).
-    if !under_dialog && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
+    if primary && !under_dialog && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
         crate::spring_tools::note_canvas_press(app);
     }
     let bars_id = egui::Id::unique(("pc-canvas-bars-hover", idx));
     update_canvas_navigation(app, &mut view, CanvasNavigationInput { ctx: &ctx, response: &response, free_hover, wheel_owner, xf, ppp, idx });
 
-    // Pen pressure/tilt for this frame's tool events (mouse = 1.0), unless Preferences › Tools ›
-    // Use Tablet Pressure is off; the pen's eraser end selects the Eraser.
-    app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
-    let curve = app.session.prefs().tools.pressure_curve.clone();
-    app.stylus.set_pressure_curve(&curve);
-    app.stylus.update_for_frame(ui.ctx().cumulative_frame_nr(), &ui.input(|i| i.events.clone()));
-    crate::stylus::Stylus::sync_eraser_tool(app);
-    // A Magnetic Lasso border left behind by a tool or document switch is dropped.
-    crate::magnetic_lasso_ui::frame(app);
-    // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
-    crate::layer_picker::prune(app);
-    // Held keys (hold_keys.rs): Space repositions a crop frame, marquee, lasso or shape being
-    // drawn; otherwise Space is the Hand and ⌘Space / ⌥Space the Zoom tool while held.
-    let reposition = crate::hold_keys::reposition_held(app, &ctx);
-    crate::crop_ui::set_space(app, reposition);
-    // ⌘ (Ctrl) held: a temporary Straighten with the Crop tool.
-    crate::crop_straighten::set_held(app, !ctx.text_edit_focused() && ui.input(|i| i.modifiers.command));
-    // A tab switched this frame drops the other document's pending crop (#1918).
-    crate::crop_ui::cancel_stale(app);
-    crate::crop_ui::ensure_frame(app);
-    let mut drawing = crate::crop_ui::active(app);
-    if let Some(pen) = app.ui.pen.as_mut().filter(|pen| pen.dragging && !pen.curvature) {
-        pen.reposition = reposition;
-        drawing = true;
-    }
-    if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
-        d.reposition = reposition;
-        drawing = true;
-    }
-    let temporary = crate::hold_keys::for_frame(app, &ctx, drawing || crate::type_transform::active(app));
+    let temporary = if secondary {
+        crate::hold_keys::for_frame(app, &ctx, false)
+    } else {
+        // Pen pressure/tilt for this frame's tool events (mouse = 1.0), unless Preferences › Tools ›
+        // Use Tablet Pressure is off; the pen's eraser end selects the Eraser.
+        app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
+        let curve = app.session.prefs().tools.pressure_curve.clone();
+        app.stylus.set_pressure_curve(&curve);
+        app.stylus.update_for_frame(ui.ctx().cumulative_frame_nr(), &ui.input(|i| i.events.clone()));
+        crate::stylus::Stylus::sync_eraser_tool(app);
+        // A Magnetic Lasso border left behind by a tool or document switch is dropped.
+        crate::magnetic_lasso_ui::frame(app);
+        // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
+        crate::layer_picker::prune(app);
+        // Held keys (hold_keys.rs): Space repositions a crop frame, marquee, lasso or shape being
+        // drawn; otherwise Space is the Hand and ⌘Space / ⌥Space the Zoom tool while held.
+        let reposition = crate::hold_keys::reposition_held(app, &ctx);
+        crate::crop_ui::set_space(app, reposition);
+        // ⌘ (Ctrl) held: a temporary Straighten with the Crop tool.
+        crate::crop_straighten::set_held(app, !ctx.text_edit_focused() && ui.input(|i| i.modifiers.command));
+        // A tab switched this frame drops the other document's pending crop (#1918).
+        crate::crop_ui::cancel_stale(app);
+        crate::crop_ui::ensure_frame(app);
+        let mut drawing = crate::crop_ui::active(app);
+        if let Some(pen) = app.ui.pen.as_mut().filter(|pen| pen.dragging && !pen.curvature) {
+            pen.reposition = reposition;
+            drawing = true;
+        }
+        if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
+            d.reposition = reposition;
+            drawing = true;
+        }
+        crate::hold_keys::for_frame(app, &ctx, drawing || crate::type_transform::active(app))
+    };
     let space_pan = temporary == Some(crate::hold_keys::Temporary::Hand);
     let middle = ui.input(|i| i.pointer.middle_down());
     let tool = match temporary {
@@ -1952,9 +2007,13 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     };
     // ⌘ held: this frame's gestures go to the Move tool (`PhotocraftApp::active_tool`). The Hand
     // and Zoom never reach `tool_event`, so only the Move needs the state machine to know.
-    app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
+    if !secondary {
+        app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
+    }
     // `~` held: a Brush or Pencil stroke that starts now erases (`tool_event`'s `Down`).
-    app.held_erase = crate::hold_keys::erase_held(app, &ctx);
+    if !secondary {
+        app.held_erase = crate::hold_keys::erase_held(app, &ctx);
+    }
     // Zoom direction: the temporary zoom key decides, else ⌥ (Zoom tool), held or latched in
     // Window › Modifier Keys (the way around a desktop that takes Alt+click, `alt_grab`).
     let sticky_alt = app.ui.shell.sticky_alt;
@@ -1964,7 +2023,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         _ => alt || sticky_alt,
     };
 
-    if under_dialog {
+    if under_dialog && !secondary {
         handle_dialog_canvas_input(
             app,
             DialogCanvasInput {
@@ -2014,7 +2073,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         ctx.set_cursor_icon(crate::tool_cursor::hand(&ctx, true));
     } else if primary && !stroke_dismissal && temporary.is_none() && !middle && crate::layer_picker::armed(app).is_some() {
         layer_picker_eyedropper(app, ui, &ctx, &response, &xf);
-    } else if primary && !stroke_dismissal {
+    } else if (primary || secondary) && !stroke_dismissal {
         let input = CanvasToolInput {
             ctx: &ctx,
             response: &response,
@@ -2031,7 +2090,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             zoom_out: &zoom_out,
             display_zoom: display_view.zoom,
         };
-        handle_primary_canvas_input(app, ui, &mut view, &input);
+        if primary {
+            handle_primary_canvas_input(app, ui, &mut view, &input);
+        } else {
+            handle_secondary_canvas_input(app, ui, &mut view, &input);
+        }
     }
     if crop_camera && let (Some((center, rotation)), Some(now)) = (camera, app.ui.views.get(idx)) {
         if now.center != center {
@@ -2090,6 +2153,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         tool,
         middle,
         flip,
+        flip_vertical,
         aspect,
         bars_id,
         layer_edges,
@@ -2453,7 +2517,7 @@ mod zoom_animation_tests {
 
     /// Screen geometry shared by the zoom-transition regressions.
     fn camera(view: &View) -> ViewXform {
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0)), zoom: view.zoom, center: view.center, flip: false, rotation: 0.0, aspect: 1.0 }
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0)), zoom: view.zoom, center: view.center, flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 }
     }
 
     /// A settled camera whose transition state starts empty.
@@ -2613,7 +2677,7 @@ mod lasso_preview_tests {
     use super::*;
 
     fn xf() -> ViewXform {
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 }
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 }
     }
 
     /// What `draw` paints: (black dashes, black solid paths).
@@ -2890,7 +2954,7 @@ fn polygon_edge_scroll(app: &PhotocraftApp, ctx: &egui::Context, idx: usize, rec
     };
     let velocity = vec2(speed(pointer.x, rect.left(), rect.right()), speed(pointer.y, rect.top(), rect.bottom()));
     let velocity = velocity * (600.0 / velocity.length().max(600.0));
-    let xf = ViewXform { rect, zoom, center: view.center, flip: app.canvas_flip_horizontal(), rotation: view.rotation, aspect: app.ui.view.display_aspect() };
+    let xf = ViewXform { rect, zoom, center: view.center, flip: app.canvas_flip_horizontal(), flip_vertical: app.canvas_flip_vertical(), rotation: view.rotation, aspect: app.ui.view.display_aspect() };
     let delta = xf.unmap_vec(velocity) * dt.min(0.05) / zoom;
     view.center[0] += delta.x;
     view.center[1] += delta.y;

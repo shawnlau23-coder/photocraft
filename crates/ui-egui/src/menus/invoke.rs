@@ -40,6 +40,9 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
 
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if !PhotocraftApp::secondary_view_command(id) {
+        app.require_main_view()?;
+    }
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
     {
@@ -302,6 +305,9 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
 }
 
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if !PhotocraftApp::secondary_view_command(id) {
+        app.require_main_view()?;
+    }
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
     }

@@ -6,6 +6,7 @@ fn xform(ppp: f32, physical_size: [f32; 2]) -> ViewXform {
         zoom: 1.0 / ppp,
         center: [1500.0, 1000.0],
         flip: false,
+        flip_vertical: false,
         rotation: 0.0,
         aspect: 1.0,
     }
@@ -44,6 +45,7 @@ fn integer_magnification_aligns_flipped_and_aspect_corrected_views() {
             zoom: 2.0,
             center: [1500.125, 999.75],
             flip,
+            flip_vertical: false,
             aspect: 1.5,
             ..xform(1.0, [523.0, 471.0])
         };

@@ -696,6 +696,9 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             continue;
         }
+        if app.ui.focused_window.is_some() && !ctx.input(|i| i.focused) && !PhotocraftApp::secondary_view_command(&id) {
+            continue;
+        }
         // The rows are disabled while a dialog is open; a click that raced the update is dropped.
         if !crate::menus::modal_allows(app, &id) {
             continue;
@@ -759,7 +762,7 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
         (d.doc.id.0, d.revision, d.active_layer.map(|l| l.0), d.selected_layers.len(), d.isolated_layers.len()).hash(&mut h);
     }
     let ui = &app.ui;
-    (ui.focused_window, app.effective_flip(), app.flip_enabled()).hash(&mut h);
+    (ui.focused_window, app.effective_flip(), app.effective_flip_axis(true), app.flip_enabled()).hash(&mut h);
     (&ui.recent_files, &ui.workspace, ui.palette_open, ui.transform.is_some(), ui.text_edit.is_some(), ui.dialogs.len()).hash(&mut h);
     (app.discard.is_some(), app.camera_raw.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
     serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool)).unwrap_or_default().hash(&mut h);

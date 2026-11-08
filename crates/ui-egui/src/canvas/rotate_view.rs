@@ -197,7 +197,7 @@ pub fn drag(ctx: &egui::Context, view: &mut View, xf: &ViewXform, b: &Buttons, p
         return b.started || b.dragged || b.stopped;
     };
     if let Some(p) = pointer.filter(|_| b.dragged || b.stopped) {
-        let delta = screen_delta(pointer_deg(p, z.pivot) - z.start_pointer, xf.flip);
+        let delta = screen_delta(pointer_deg(p, z.pivot) - z.start_pointer, xf.reflected());
         let mut angle = z.start_rotation + delta;
         if !angle.is_finite() {
             angle = z.start_rotation;
@@ -250,8 +250,7 @@ pub fn overlay(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter
     let rad = view.rotation.to_radians();
     let (c, s) = if view.rotation.abs() < 1e-6 { (1.0, 0.0) } else { (rad.cos(), rad.sin()) };
     let (rx, ry) = (s, -c);
-    let sx = if xf.flip { -1.0 } else { 1.0 };
-    let needle = vec2(rx * sx, ry) * (r.width() * 0.32);
+    let needle = xf.reflect(vec2(rx, ry)) * (r.width() * 0.32);
     let tip = r.center() + needle;
     painter.line_segment([r.center(), tip], Stroke::new(2.0, t.accent));
     painter.circle_filled(tip, 2.5, t.accent);

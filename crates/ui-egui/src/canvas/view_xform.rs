@@ -8,6 +8,7 @@ pub struct ViewXform {
     pub center: [f32; 2],
     /// View › Flip Horizontal: the view is mirrored left-right (the document is not).
     pub flip: bool,
+    pub flip_vertical: bool,
     /// Camera rotation in degrees around [`Self::center`]. Clockwise (Y-down) is positive; applied
     /// before flip.
     pub rotation: f32,
@@ -29,6 +30,7 @@ impl ViewXform {
                 zoom: zoom / app.canvas_ppp(),
                 center,
                 flip: app.canvas_flip_horizontal(),
+                flip_vertical: app.canvas_flip_vertical(),
                 rotation: v.rotation,
                 aspect: app.ui.view.display_aspect(),
             }
@@ -90,10 +92,24 @@ impl ViewXform {
         self.zoom * self.sx()
     }
 
+    pub fn image_uv(self) -> Rect {
+        let u = f32::from(self.flip);
+        let v = f32::from(self.flip_vertical);
+        Rect::from_min_max(pos2(u, v), pos2(1.0 - u, 1.0 - v))
+    }
+
+    pub fn reflected(self) -> bool {
+        self.flip ^ self.flip_vertical
+    }
+
+    pub fn reflect(self, v: Vec2) -> Vec2 {
+        vec2(if self.flip { -v.x } else { v.x }, if self.flip_vertical { -v.y } else { v.y })
+    }
+
     /// Unflip, unrotate and unstretch a screen-space vector (no zoom). Hand pan and zoom-about
     /// use this.
     pub fn unmap_vec(self, d: Vec2) -> Vec2 {
-        let d = if self.flip { vec2(-d.x, d.y) } else { d };
+        let d = self.reflect(d);
         let (c, s) = self.sincos();
         vec2((d.x * c + d.y * s) / self.sx(), -d.x * s + d.y * c)
     }
@@ -104,7 +120,7 @@ impl ViewXform {
         let (c, s) = self.sincos();
         let dx = d.x * self.sx();
         let v = vec2(dx * c - d.y * s, dx * s + d.y * c) * self.zoom;
-        if self.flip { vec2(-v.x, v.y) } else { v }
+        self.reflect(v)
     }
 
     pub fn to_screen(&self, x: f32, y: f32) -> Pos2 {
@@ -113,8 +129,7 @@ impl ViewXform {
         let dy = y - self.center[1];
         let rx = dx * c - dy * s;
         let ry = dx * s + dy * c;
-        let sx = if self.flip { -1.0 } else { 1.0 };
-        self.rect.center() + vec2(rx * self.zoom * sx, ry * self.zoom)
+        self.rect.center() + self.reflect(vec2(rx, ry)) * self.zoom
     }
     pub fn to_doc(&self, p: Pos2) -> [f64; 2] {
         let d = (p - self.rect.center()) / self.zoom;

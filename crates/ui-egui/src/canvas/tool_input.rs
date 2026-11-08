@@ -327,7 +327,7 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
 
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
-    if consumes_cancelled_vector_event(app, ev) {
+    if app.secondary_canvas() || consumes_cancelled_vector_event(app, ev) {
         return;
     }
     let Some((armed, mods)) = preflight_tool_event(app, ev, mods) else { return };

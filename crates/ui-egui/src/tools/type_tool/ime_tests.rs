@@ -22,7 +22,7 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>) -
     let raw = egui::RawInput { focused: true, events, ..Default::default() };
     let mut out = ctx.run_ui(raw, |ui| {
         let rect = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0));
-        let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
         handle_keys(app, ui.ctx());
         draw_overlay(app, ui.painter(), &xf);
         sync_ime(app, ui.ctx());
@@ -274,7 +274,7 @@ fn invalidated_descriptor(app: &mut PhotocraftApp, ctx: &egui::Context, discard:
         let mut out = ctx.run_ui(egui::RawInput { focused: true, ..Default::default() }, |ui| {
             handle_keys(app, ui.ctx());
             let rect = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0));
-            let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+            let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
             draw_overlay(app, ui.painter(), &xf);
             if passes.is_empty() {
                 ui.ctx().request_discard("invalidated preedit descriptor regression");
@@ -363,7 +363,7 @@ fn a_discarded_transition_pass_still_interrupts_the_next_descriptor() {
     let mut out = ctx.run_ui(egui::RawInput { focused: true, ..Default::default() }, |ui| {
         handle_keys(&mut app, ui.ctx());
         let rect = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0));
-        let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
         draw_overlay(&mut app, ui.painter(), &xf);
         if passes.is_empty() {
             ui.ctx().request_discard("IME transition regression");
@@ -1230,6 +1230,7 @@ fn a_discarded_custom_output_allocates_no_new_id_and_final_absence_retires_then_
                 zoom: 1.0,
                 center: [100.0, 100.0],
                 flip: false,
+                flip_vertical: false,
                 rotation: 0.0,
                 aspect: 1.0,
             };

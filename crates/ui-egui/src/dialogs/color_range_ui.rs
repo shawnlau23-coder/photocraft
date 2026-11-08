@@ -591,7 +591,7 @@ fn overlay_pixel(mode: &str, coverage: f32) -> Color32 {
 
 /// Photoshop's Selection Preview on the image, shared by CPU/GPU canvases and all platforms.
 /// This never edits the real selection, image, channels or history; closing the dialog removes it.
-pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, doc: DocId, image: Rect, flip: bool) {
+pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, doc: DocId, xf: &crate::canvas::ViewXform, bounds: photocraft_geom::Rect) {
     let Some(fields) = app.ui.dialogs.last().filter(|d| owns(&d.fields)).map(|d| d.fields.clone()) else { return };
     let mode = s(&fields, "__selectionPreview", "none");
     if mode == "none" || !app.session.active().is_some_and(|st| st.doc.id == doc) {
@@ -630,8 +630,10 @@ pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Conte
         }
     }
     if let Some(tex) = app.color_range.as_ref().and_then(|p| p.overlay.as_ref()) {
-        let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)) };
-        painter.image(tex.id(), image, uv, Color32::WHITE);
+        crate::canvas::paint::paint_mapped_image_at(
+            painter, xf, tex.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            [bounds.x0 as f32, bounds.y0 as f32], [bounds.width() as f32, bounds.height() as f32], Color32::WHITE,
+        );
     }
 }
 

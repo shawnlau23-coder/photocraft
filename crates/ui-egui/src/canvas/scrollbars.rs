@@ -112,7 +112,7 @@ pub fn clamp_view_with_aspect(view: &mut View, size: egui::Vec2, ppp: f32, aspec
             if view.center[0].is_finite() { view.center[0] } else { w as f32 / 2.0 },
             if view.center[1].is_finite() { view.center[1] } else { h as f32 / 2.0 },
         ];
-        let xf = crate::canvas::ViewXform { rect: egui::Rect::from_min_size(Pos2::ZERO, size), zoom, center, flip: false, rotation: view.rotation, aspect };
+        let xf = crate::canvas::ViewXform { rect: egui::Rect::from_min_size(Pos2::ZERO, size), zoom, center, flip: false, flip_vertical: false, rotation: view.rotation, aspect };
         let image = xf.image_bounds(view.doc_size);
         if !image.is_finite() {
             return false;
@@ -153,17 +153,18 @@ pub fn bar_rects(rect: Rect, horizontal: bool, vertical: bool) -> (Option<Rect>,
 /// `aspect` is the displayed pixel aspect ratio (a document pixel is that many points wider per
 /// point of height); `overscroll` is Preferences › Tools › Overscroll.
 /// Returns true when the pointer is over a bar (the canvas then leaves the pointer alone).
-pub fn show(ui: &Ui, rect: Rect, view: &mut View, flip: bool, aspect: f32, overscroll: bool, key: Id) -> bool {
+pub fn show(ui: &Ui, rect: Rect, view: &mut View, flip: bool, flip_vertical: bool, aspect: f32, overscroll: bool, key: Id) -> bool {
     let [w, h] = view.doc_size;
     // `Span` works in egui points; `View::zoom` is device pixels per document pixel.
     let ppp = ui.ctx().pixels_per_point();
     let zoom = view.zoom / if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
     // Horizontal axis in "screen order": with the view flipped, run the image backwards.
     let hx = |c: f32| if flip { w as f32 - c } else { c };
+    let vy = |c: f32| if flip_vertical { h as f32 - c } else { c };
     let with_extent = |s: Span| (s, s.extent(overscroll));
     let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
     let ex = Span::of(w as f32, hx(view.center[0]), rect.width() / aspect, zoom).map(with_extent);
-    let ey = Span::of(h as f32, view.center[1], rect.height(), zoom).map(with_extent);
+    let ey = Span::of(h as f32, vy(view.center[1]), rect.height(), zoom).map(with_extent);
     if ex.is_none() && ey.is_none() {
         return false;
     }
@@ -193,7 +194,7 @@ pub fn show(ui: &Ui, rect: Rect, view: &mut View, flip: bool, aspect: f32, overs
             if axis == 0 {
                 view.center[0] = if flip { w as f32 - c } else { c };
             } else {
-                view.center[1] = c;
+                view.center[1] = vy(c);
             }
         };
         let center = (s.v0 + s.v1) / 2.0;
@@ -326,7 +327,7 @@ mod tests {
             zoom_anchor: None,
             display_camera: None,
             zoom_transition: None,
-            flip_horizontal: false,
+            flip_horizontal: false, flip_vertical: false,
         };
         assert!(clamp_view(&mut v, vec2(500.0, 400.0), 1.0));
         assert_eq!(v.center, [250.0, 200.0]);
@@ -357,7 +358,7 @@ mod tests {
             zoom_anchor: None,
             display_camera: None,
             zoom_transition: None,
-            flip_horizontal: false,
+            flip_horizontal: false, flip_vertical: false,
         };
         assert!(!clamp_view(&mut v, vec2(500.0, 400.0), 1.0));
     }

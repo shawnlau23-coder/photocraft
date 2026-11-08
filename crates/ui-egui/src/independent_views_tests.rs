@@ -31,6 +31,8 @@ fn independent_flip_commands_target_one_window_and_leave_artwork_and_history_unt
     let b = window(&mut app, &ctx);
     let before = app.session.active().unwrap().clone();
     let history = serde_json::to_value(before.history.entries()).unwrap();
+    let opts = Default::default();
+    let png = photocraft_io::export(&before.doc, "png", &opts).unwrap().bytes;
     app.ui.focused_window = Some(a);
     assert!(flip(&mut app, &ctx));
     assert!(!app.ui.views[0].flip_horizontal);
@@ -47,11 +49,13 @@ fn independent_flip_commands_target_one_window_and_leave_artwork_and_history_unt
     assert!(flip(&mut app, &ctx));
     assert!(!app.ui.windows[0].view.flip_horizontal);
     assert!(app.ui.windows[1].view.flip_horizontal);
+    assert_eq!(menus::invoke(&mut app, &ctx, "view.flipVertical", json!({})).unwrap(), json!(true));
     let after = app.session.active().unwrap();
     assert!(Arc::ptr_eq(&before.doc, &after.doc));
     assert_eq!(before.doc, after.doc);
     assert_eq!((before.revision, before.saved_revision, before.last_damage), (after.revision, after.saved_revision, after.last_damage));
     assert_eq!(history, serde_json::to_value(after.history.entries()).unwrap());
+    assert_eq!(photocraft_io::export(&after.doc, "png", &opts).unwrap().bytes, png);
     assert_eq!(
         (before.history.can_undo(), before.history.can_redo(), before.is_dirty()),
         (after.history.can_undo(), after.history.can_redo(), after.is_dirty())
@@ -79,7 +83,7 @@ fn independent_flip_new_windows_inherit_framing_from_source_but_flip_from_main()
     app.ui.windows[0].view.rotation = 37.0;
     app.ui.windows[0].view.flip_horizontal = false;
     let b = window(&mut app, &ctx);
-    let expected = crate::state::View { flip_horizontal: true, ..app.ui.windows[0].view.clone() };
+    let expected = crate::state::View { flip_horizontal: true, flip_vertical: false, ..app.ui.windows[0].view.clone() };
     assert_eq!(app.ui.windows[1].view, expected);
     app.ui.focused_window = Some(b);
     assert!(!flip(&mut app, &ctx));
@@ -283,7 +287,7 @@ fn independent_flip_child_canvas_pan_and_zoom_do_not_change_the_main_camera() {
                 app.last_canvas_rect = rect;
                 app.ppp = ui.ctx().pixels_per_point();
                 let camera = app.ui.views[0].clone();
-                crate::canvas::canvas_view(app, ui, 0, rect, camera, true);
+                app.ui.views[0] = crate::canvas::canvas_view(app, ui, 0, rect, camera, true);
             });
         },
         app,
@@ -430,6 +434,7 @@ fn following_main_is_live_without_overwriting_the_saved_orientation_or_camera() 
     assert_ne!(a, c);
     assert!(!app.ui.windows.last().unwrap().follow_main_flip);
     assert_eq!(app.with_document_window(c, |app| app.canvas_flip_horizontal()), Some(false));
+    assert_eq!(menus::invoke(&mut app, &ctx, "view.flipVertical", json!({})).unwrap(), json!(true));
     let after = app.session.active().unwrap();
     assert!(Arc::ptr_eq(&before.doc, &after.doc));
     assert_eq!(before.revision, after.revision);
@@ -476,4 +481,125 @@ fn older_window_state_defaults_to_independent_flip() {
     saved.as_object_mut().unwrap().remove("follow_main_flip");
     let restored: crate::state::DocWindow = serde_json::from_value(saved).unwrap();
     assert!(!restored.follow_main_flip);
+}
+
+#[test]
+fn vertical_flip_follows_main_and_restores_both_independent_axes() {
+    let (mut app, ctx) = app();
+    app.ui.views[0].flip_vertical = true;
+    let id = window(&mut app, &ctx);
+    assert!(app.ui.windows[0].view.flip_vertical);
+    app.ui.focused_window = Some(id);
+    assert_eq!(menus::invoke(&mut app, &ctx, "view.flipVertical", json!({})).unwrap(), json!(false));
+    assert!(flip(&mut app, &ctx));
+    app.ui.windows[0].follow_main_flip = true;
+    assert!(!app.flip_enabled());
+    assert_eq!(app.with_document_window(id, |a| (a.canvas_flip_horizontal(), a.canvas_flip_vertical())), Some((false, true)));
+    app.ui.focused_window = None;
+    assert_eq!(menus::invoke(&mut app, &ctx, "view.flipVertical", json!({})).unwrap(), json!(false));
+    assert_eq!(app.with_document_window(id, |a| (a.canvas_flip_horizontal(), a.canvas_flip_vertical())), Some((false, false)));
+    app.ui.windows[0].follow_main_flip = false;
+    assert_eq!(app.with_document_window(id, |a| (a.canvas_flip_horizontal(), a.canvas_flip_vertical())), Some((true, false)));
+}
+
+#[test]
+fn vertical_flip_round_trips_points_and_vectors_after_rotation_and_aspect() {
+    let (app, _) = app();
+    let base = ViewXform { rotation: 31.0, zoom: 2.3, aspect: 1.6, center: [12.5, 21.25], ..ViewXform::active(&app).unwrap() };
+    let point = pos2(28.0, 19.0);
+    let delta = base.to_screen(point.x, point.y) - base.rect.center();
+    for (flip, flip_vertical) in [(false, false), (true, false), (false, true), (true, true)] {
+        let xf = ViewXform { flip, flip_vertical, ..base };
+        let screen = xf.to_screen(point.x, point.y);
+        let want = base.rect.center() + vec2(if flip { -delta.x } else { delta.x }, if flip_vertical { -delta.y } else { delta.y });
+        assert!(screen.distance(want) < 0.001);
+        let [x, y] = xf.to_doc(screen);
+        assert!(point.distance(pos2(x as f32, y as f32)) < 0.001);
+        let v = vec2(7.0, -5.0);
+        assert!((xf.unmap_vec(xf.map_vec(v) / xf.zoom) - v).length() < 0.001);
+        assert_eq!(xf.reflected(), flip ^ flip_vertical);
+    }
+}
+
+#[test]
+fn secondary_document_input_rejects_edits_but_main_paints_and_undoes() {
+    use crate::canvas::{ToolEvent, tool_event};
+
+    let (mut app, ctx) = app();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let id = window(&mut app, &ctx);
+    let before = app.session.active().unwrap().clone();
+    let stroke = |app: &mut PhotocraftApp| {
+        tool_event(app, ToolEvent::Down { x: 12.0, y: 12.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(app, ToolEvent::Move { x: 25.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+        tool_event(app, ToolEvent::Up { x: 25.0, y: 20.0 }, Modifiers::NONE);
+    };
+    app.with_document_window(id, |app| {
+        stroke(app);
+        assert!(app.drag.is_none() && app.live_stroke.is_none());
+        for cmd in ["paint.stroke", "edit.fill", "edit.clear", "select.all", "layer.new.layer", "layer.layerMask.revealAll",
+                    "edit.freeTransform", "image.crop", "edit.undo"] {
+            assert!(app.run(cmd, json!({})).is_err(), "{cmd}");
+            assert!(menus::invoke(app, &ctx, cmd, json!({})).is_err(), "{cmd}");
+        }
+        assert_eq!(menus::invoke(app, &ctx, "view.flipHorizontal", json!({})).unwrap(), json!(true));
+        assert_eq!(menus::invoke(app, &ctx, "view.flipVertical", json!({})).unwrap(), json!(true));
+        app.run("tools.setColors", json!({"foreground": [1.0, 0.0, 0.0, 1.0]})).unwrap();
+        assert!(app.run("document.sampleColor", json!({"x":12.0, "y":12.0, "sampleLayer":"all"})).is_ok());
+    }).unwrap();
+    let after = app.session.active().unwrap();
+    assert!(Arc::ptr_eq(&before.doc, &after.doc));
+    assert_eq!(before.revision, after.revision);
+    assert_eq!(before.history.past_len(), after.history.past_len());
+
+    app.ui.tool = crate::state::Tool::Brush;
+    stroke(&mut app);
+    let painted = app.session.active().unwrap();
+    assert_ne!(painted.doc, before.doc);
+    assert_eq!(painted.history.past_len(), before.history.past_len() + 1);
+    assert!(app.session.undo());
+    assert_eq!(app.session.active().unwrap().doc, before.doc);
+}
+
+#[test]
+fn secondary_document_canvas_samples_without_painting() {
+    let (mut app, ctx) = app();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let id = window(&mut app, &ctx);
+    app.ui.windows[0].view.flip_vertical = true;
+    app.ui.windows[0].view.rotation = 25.0;
+    let before = app.session.active().unwrap().clone();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 300.0)).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            app.with_document_window(id, |app| {
+                let rect = ui.max_rect();
+                let view = app.ui.views[0].clone();
+                // Even an editable flag from a caller cannot make a secondary editable.
+                app.ui.views[0] = crate::canvas::canvas_view(app, ui, 0, rect, view, true);
+            });
+        },
+        app,
+    );
+    let p = pos2(200.0, 150.0);
+    let gesture = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, mods| {
+        h.event(Event::PointerMoved(p));
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: mods });
+        h.step();
+        h.event(Event::PointerMoved(p + vec2(12.0, 10.0)));
+        h.step();
+        h.event(Event::PointerButton { pos: p + vec2(12.0, 10.0), button: PointerButton::Primary, pressed: false, modifiers: mods });
+        h.step();
+    };
+    for tool in [crate::state::Tool::Brush, crate::state::Tool::Eraser, crate::state::Tool::RectMarquee, crate::state::Tool::Crop] {
+        h.state_mut().ui.tool = tool;
+        gesture(&mut h, Modifiers::NONE);
+    }
+    h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
+    gesture(&mut h, Modifiers::NONE);
+    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
+    assert!(h.state().ui.crop_rect.is_none() && h.state().drag.is_none());
+    let after = h.state().session.active().unwrap();
+    assert!(Arc::ptr_eq(&before.doc, &after.doc));
+    assert_eq!(before.history.past_len(), after.history.past_len());
 }

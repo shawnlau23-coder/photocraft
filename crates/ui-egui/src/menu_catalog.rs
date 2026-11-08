@@ -656,6 +656,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["View"], "Print Size", None, "view.printSize"),
     (&["View"], "---", None, "---"),
     (&["View"], "Flip Horizontal", None, "view.flipHorizontal"),
+    (&["View"], "Flip Vertical", None, "view.flipVertical"),
     (&["View"], "Linked Cursor", None, "view.linkedCursor"),
     (&["View", "Linked Cursor Settings", "Diameter"], "2 px", None, "view.linkedCursor.size.2"),
     (&["View", "Linked Cursor Settings", "Diameter"], "4 px", None, "view.linkedCursor.size.4"),

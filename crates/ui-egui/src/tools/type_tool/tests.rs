@@ -483,7 +483,7 @@ fn arrow_keys_reset_caret_blink_phase() {
         let mut out = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| {
             let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
             let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(rect);
-            let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+            let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
             draw_overlay(app, &painter, &xf);
         });
         out.textures_delta.clear();
@@ -577,7 +577,7 @@ fn closed_path_aligned_selection_highlights_every_visible_cluster() {
         let mut output = ctx.run_ui(Default::default(), |ui| {
             let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
             let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(rect);
-            let xf = ViewXform { rect, zoom: 1.0, center: [120.0, 70.0], flip: false, rotation: 0.0, aspect: 1.0 };
+            let xf = ViewXform { rect, zoom: 1.0, center: [120.0, 70.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
             draw_overlay(&mut app, &painter, &xf);
         });
         output.textures_delta.clear();

@@ -40,6 +40,7 @@ pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize, f
     let wid = app.ui.alloc_id();
     let mut view = if app.session.active_index() == Some(doc) { app.focused_view() } else { app.ui.views.get(doc) }.cloned().unwrap_or_default();
     // Keep the source camera's framing, but initialize presentation from Main.
+    view.flip_vertical = app.ui.views.get(doc).is_some_and(|main| main.flip_vertical);
     view.flip_horizontal = app.ui.views.get(doc).is_some_and(|main| main.flip_horizontal);
     view.zoom_animating = false;
     view.zoom_anchor = None;

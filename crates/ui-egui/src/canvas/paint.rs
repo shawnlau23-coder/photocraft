@@ -9,7 +9,7 @@ use super::view_xform::ViewXform;
 use super::{Color32, DRect, Document, Mesh, PhotocraftApp, Pos2, Rect, Stroke, TextureOptions, Tool, json, pos2, vec2};
 
 /// A texture mapped over the `size` document area starting at `origin` (follows a rotated view).
-pub(super) fn paint_mapped_image_at(painter: &egui::Painter, xf: &ViewXform, tex: egui::TextureId, uv: Rect, origin: [f32; 2], size: [f32; 2], tint: Color32) {
+pub(crate) fn paint_mapped_image_at(painter: &egui::Painter, xf: &ViewXform, tex: egui::TextureId, uv: Rect, origin: [f32; 2], size: [f32; 2], tint: Color32) {
     let ([x, y], [w, h]) = (origin, size);
     let pts = [xf.to_screen(x, y), xf.to_screen(x + w, y), xf.to_screen(x + w, y + h), xf.to_screen(x, y + h)];
     let uvs = [uv.min, pos2(uv.max.x, uv.min.y), uv.max, pos2(uv.min.x, uv.max.y)];
@@ -84,7 +84,7 @@ pub(super) fn paint_cpu_document(
         if rotated {
             paint_mapped_image_at(painter, xf, tex, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), origin, size, Color32::WHITE);
         } else {
-            let uv = if xf.flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)) };
+            let uv = xf.image_uv();
             painter.image(tex, img_rect, uv, Color32::WHITE);
         }
     }
@@ -416,7 +416,11 @@ pub(super) fn draw_beyond_canvas(app: &mut PhotocraftApp, painter: &egui::Painte
         if xf.flip {
             (u0, u1) = (u1, u0);
         }
-        let uv = Rect::from_min_max(pos2(u0, part(b.y0, t.y0, t.height())), pos2(u1, part(b.y1, t.y0, t.height())));
+        let (mut v0, mut v1) = (part(b.y0, t.y0, t.height()), part(b.y1, t.y0, t.height()));
+        if xf.flip_vertical {
+            (v0, v1) = (v1, v0);
+        }
+        let uv = Rect::from_min_max(pos2(u0, v0), pos2(u1, v1));
         // The texture's edge texels stretch over the point under the canvas.
         let (r, e) = (xf.doc_rect(*b), under_canvas(xf.doc_rect(*b), canvas));
         let at = |p: Pos2| uv.min + (p - r.min) / r.size() * uv.size();
@@ -537,7 +541,6 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             };
             let Some(st) = app.session.active() else { return };
             let size = [st.doc.size.width, st.doc.size.height];
-            let doc_rect = xf.doc_rect(st.doc.bounds());
             let trail = app.trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size));
             let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
             match t {
@@ -550,7 +553,7 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
                 // (Spot Healing #2364; the Mixer Brush, and a tool whose live stroke didn't start).
                 _ => trail.feed_dabs(&d.points, brush),
             }
-            trail.draw(painter, doc_rect, xf.flip, col);
+            trail.draw(painter, xf, col);
         }
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::draw_shape_preview(app, painter, xf, t, d.start, last, d.live),
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => {

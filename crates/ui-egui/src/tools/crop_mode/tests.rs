@@ -169,11 +169,12 @@ fn assert_frame(app: &PhotocraftApp, want: [f64; 4], what: &str) {
 /// on, so the content can be centred in it without leaving the Crop tool. The box stays put.
 #[test]
 fn moving_the_image_snaps_the_frame_to_the_document_centre() {
-    for (snap, zoom, flip) in [(false, 1.0, false), (true, 1.0, false), (true, 2.0, false), (true, 1.0, true)] {
+    for (snap, zoom, flip, flip_vertical) in [(false, 1.0, false, false), (true, 1.0, false, false), (true, 2.0, false, true), (true, 1.0, true, true)] {
         let mut app = app();
         app.ui.extras.snap = snap;
         app.ui.views[0].zoom = zoom;
         app.ui.views[0].flip_horizontal = flip;
+        app.ui.views[0].flip_vertical = flip_vertical;
         with_frame(&mut app);
         // The frame [40, 30, 100, 70] goes 27 px right over the image: its centre lands 3 px
         // short of the document's (100, 50), inside the snap radius at either zoom.
@@ -679,7 +680,7 @@ fn pivoting_keeps_the_point_on_screen() {
         for (from, to) in [(0.0, 30.0), (45.0, -90.0), (170.0, -170.0)] {
             let center = [100.0f32, 50.0];
             let c = [70.0, 20.0];
-            let a = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), zoom: 2.0, center, flip, rotation: from, aspect: 1.0 };
+            let a = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), zoom: 2.0, center, flip, flip_vertical: false, rotation: from, aspect: 1.0 };
             let n = pivot_center(center, c, from, to, flip);
             let b = ViewXform { center: n, rotation: to, ..a };
             let (p, q) = (a.to_screen(70.0, 20.0), b.to_screen(70.0, 20.0));

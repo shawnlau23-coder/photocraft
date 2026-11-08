@@ -577,6 +577,7 @@ fn resize_follows_the_view() {
         zoom: 1.0,
         center: [0.0, 0.0],
         flip,
+        flip_vertical: false,
         rotation,
         aspect: 1.0,
     };
