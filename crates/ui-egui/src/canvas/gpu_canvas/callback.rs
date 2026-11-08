@@ -60,9 +60,9 @@ impl CanvasCallback {
         let p = &self.params;
         let scale = p.zoom * ppp;
         let c = self.rect.center();
-        let ox = (c.x * ppp - p.center[0] * scale).round();
-        let oy = (c.y * ppp - p.center[1] * scale).round();
-        ([ox, oy], scale)
+        let origin = [c.x * ppp - p.center[0] * scale, c.y * ppp - p.center[1] * scale];
+        // Mirrored views already use the pixel-aligned ViewXform from the canvas.
+        (if p.flip { origin } else { origin.map(f32::round) }, scale)
     }
 
     fn uniforms(&self, screen: [u32; 2], ppp: f32, out_linear: bool, style: &CanvasStyle) -> [f32; VIEW_FLOATS] {
@@ -119,6 +119,10 @@ impl CanvasCallback {
             },
             p.center[0],
             p.center[1],
+            if p.flip { -1.0 } else { 1.0 },
+            0.0,
+            0.0,
+            0.0,
         ]
     }
 }
@@ -134,6 +138,9 @@ impl CallbackTrait for CanvasCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         let Some(res) = resources.get_mut::<Resources>() else { return Vec::new() };
         if !res.health.is_ok() {
+            return Vec::new();
+        }
+        if matches!(self.params.doc, super::CanvasTextureKey::Secondary { .. }) && !res.docs.contains_key(&self.params.doc) {
             return Vec::new();
         }
         let data = self.uniforms(screen.size_in_pixels, screen.pixels_per_point, res.out_linear, &res.style);
@@ -153,8 +160,9 @@ impl CallbackTrait for CanvasCallback {
                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
                 ],
             });
-            ViewGpu { buffer, bind_group, frame_data: [f32::NAN; VIEW_FLOATS] }
+            ViewGpu { texture: self.params.doc, buffer, bind_group, frame_data: [f32::NAN; VIEW_FLOATS] }
         });
+        v.texture = self.params.doc;
         if v.frame_data != data {
             queue.write_buffer(&v.buffer, 0, &f32_bytes(&data));
             v.frame_data = data;
@@ -197,6 +205,12 @@ impl CallbackTrait for CanvasCallback {
         for t in &doc.tiles {
             let [tx, ty, tw, th] = t.rect.map(|v| v as f32);
             let (x0, y0, x1, y1) = tile_screen_aabb(origin, scale, cen, cos, sin, [tx + ox, ty + oy, tw, th]);
+            let (x0, x1) = if self.params.flip {
+                let axis = origin[0] + cen[0] * scale;
+                (2.0 * axis - x1, 2.0 * axis - x0)
+            } else {
+                (x0, x1)
+            };
             if x1 < cx0 || y1 < cy0 || x0 > cx1 || y0 > cy1 {
                 continue;
             }

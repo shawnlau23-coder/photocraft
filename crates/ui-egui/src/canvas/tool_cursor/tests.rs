@@ -616,3 +616,39 @@ fn the_pointer_belongs_to_another_window_from_its_report_until_this_one_hears_it
     let float = Some(egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(200.0, 300.0)));
     assert!(covers(float, Some(egui::pos2(150.0, 150.0))) && !covers(float, Some(egui::pos2(98.0, 150.0))), "just outside its edge stays here");
 }
+
+#[test]
+fn document_viewport_pointer_handoff_suppresses_the_stale_canvas_cursor() {
+    use egui::{Event, Modifiers, RawInput, ViewportId};
+
+    let ctx = egui::Context::default();
+    ctx.set_embed_viewports(false);
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+    let window = crate::view_cmds::float_window(&mut app, 0, 0, false);
+    let child = ViewportId::from_hash_of(("docwin", window));
+    let mut time = 0.0;
+    let mut pass = |viewport_id, moved, alt| {
+        time += 0.016;
+        let mut input = RawInput { viewport_id, ..Default::default() };
+        input.events.push(Event::ModifiersChanged(Modifiers { alt, ..Modifiers::NONE }));
+        input.time = Some(time);
+        input.viewports.insert(child, Default::default());
+        if moved {
+            input.events.push(Event::PointerMoved(Pos2::new(25.0, 25.0)));
+        }
+        let mut elsewhere = false;
+        let mut output = ctx.run_ui(input, |ui| {
+            elsewhere = canvas_pointer_elsewhere(&app, ui.ctx());
+        });
+        output.textures_delta.clear();
+        elsewhere
+    };
+
+    assert!(!pass(ViewportId::ROOT, true, false));
+    assert!(!pass(child, true, true), "the child owns the Alt-eyedropper cursor");
+    assert!(pass(ViewportId::ROOT, false, false), "stale Main input must not install a brush cursor");
+    assert!(!pass(child, false, false), "releasing Alt keeps the cursor in the child");
+    assert!(!pass(ViewportId::ROOT, true, false), "Main can restore its brush cursor on return");
+    assert!(pass(child, false, false), "stale child input must not paint a brush outline");
+}

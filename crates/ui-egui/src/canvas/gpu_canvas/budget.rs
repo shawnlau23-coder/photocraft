@@ -49,7 +49,7 @@ pub const REFRESH_DEFERRED: &str = "deferred";
 /// synchronous composite takes a fraction of a second even with many layers.
 pub const DEFER_PX: u64 = 1 << 22;
 
-/// GPU bytes one document's display texture set (every tile and mip level) may take: a quarter
+/// Combined bytes for resident display texture sets (every tile and mip level): a quarter
 /// of physical memory (`ram`; 16 GB assumed when unknown) and at most [`vram_share`] of a
 /// discrete GPU's own memory (`vram`), at least [`MIN_GPU_BUDGET`]. The set covers the whole
 /// canvas at full resolution, so its size follows the declared canvas, not the layer pixels; a

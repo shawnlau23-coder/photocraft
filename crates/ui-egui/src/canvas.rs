@@ -114,10 +114,12 @@ pub use tabs::{TabStrip, document_area, extra_windows};
 use tabs::{dots, paint_dots};
 #[cfg(test)]
 pub(crate) use textures::detail_plan;
-pub(crate) use textures::{DetailPlan, damage_since, effect_reach, ensure_texture_in_view, retain_gpu_documents, shown_as_document};
+pub(crate) use textures::{SecondaryGpuFrame, DetailPlan, damage_since, effect_reach, ensure_texture_in_view, retain_gpu_documents, shown_as_document};
 pub use textures::{MAX_TEXTURE, ensure_texture};
 #[cfg(test)]
 use textures::{clamp_texture_side, preview_bounds, texture_factor};
+#[cfg(test)]
+pub(crate) use textures::ensure_secondary_gpu;
 use textures::{ensure_gpu, redraw_focus, visible_doc_rect};
 pub use tool_input::{ToolEvent, selection_drag_kind, tool_event};
 pub(crate) use tool_input::{command_guide_at, command_moves_layer, event_tool};
@@ -378,27 +380,33 @@ fn paint_canvas(
     // Live adjustment previews on big documents use a downsampled proxy (see proxy.rs), unless
     // Preferences › Performance › Low Resolution Previews is off.
     let mut on_gpu = false;
-    // A flipped or pixel-aspect-corrected view draws through the CPU path (the GPU canvas shader
-    // has no mirroring or non-square pixels). Rotation stays on the GPU: it is a view uniform.
-    let gpu_ok = app.view_composites.rendering_window.is_none() && crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
-    if app.gpu.is_some() {
+    // Native secondary reflection is a presentation uniform. Main keeps its legacy
+    // flip path, and non-square pixels still use the CPU canvas.
+    let secondary = app.view_composites.rendering_window;
+    let native_canvas = secondary.is_none() || ctx.viewport_id() != egui::ViewportId::ROOT;
+    let gpu_ok = native_canvas && crate::gpu_canvas::gpu_view_ok(flip && secondary.is_none(), view.rotation, aspect);
+    if secondary.is_none() && app.gpu.is_some() {
         if gpu_ok {
             crate::render_path::view_ok(app, doc.id.0);
         } else {
             crate::render_path::view_cpu(app, doc.id.0);
         }
     }
-    if app.gpu.is_some()
-        && gpu_ok
-        && let Some((k, key, preview_size)) =
-            ensure_adjust_proxy(app, idx, render_zoom).or_else(|| ensure_filter_preview(app, idx, ctx)).or_else(|| ensure_proxy_preview(app, idx, render_zoom))
-    {
+    let gpu_preview = if secondary.is_none() && app.gpu.is_some() && gpu_ok {
+        ensure_adjust_proxy(app, idx, render_zoom)
+            .or_else(|| ensure_filter_preview(app, idx, ctx))
+            .or_else(|| ensure_proxy_preview(app, idx, render_zoom))
+    } else {
+        None
+    };
+    let secondary_shown = if secondary.is_some() && gpu_ok { textures::ensure_secondary_gpu(app, idx) } else { None };
+    if let Some((k, key, preview_size)) = gpu_preview.filter(|&(_, key, size)| app.gpu.as_ref().is_some_and(|gpu| gpu.has(key, size))) {
         on_gpu = true;
         app.navigator_gpu.remove(&doc.id);
         let original_size = [doc.size.width.div_ceil(k), doc.size.height.div_ceil(k)];
         let shown = filter_preview_display_doc(app, doc, key);
         let params = crate::gpu_canvas::ViewParams {
-            doc: key,
+            doc: key.into(),
             doc_size: preview_size,
             zoom: view.zoom * k as f32 / ppp,
             // A size-changing preview grows around the old image center; keep the view's pan.
@@ -407,6 +415,7 @@ fn paint_canvas(
                 xf.center[1] / k as f32 + (preview_size[1] as f32 - original_size[1] as f32) / 2.0,
             ],
             rotation: if view.rotation.is_finite() { view.rotation.to_radians() } else { 0.0 },
+            flip: secondary.is_some() && flip,
             shadow: {
                 let t = crate::theme::Tokens::get(ctx);
                 !t.bevel && !t.pro && drop_shadow
@@ -419,35 +428,46 @@ fn paint_canvas(
             offset: [0.0, 0.0],
         };
         paint_gpu_view(painter, rect, params, &pattern);
-    } else if gpu_ok && ensure_gpu(app, ctx, idx, redraw_focus(&target_xf, &xf)) {
+    } else if secondary_shown.is_some()
+        || (secondary.is_none() && gpu_ok && gpu_preview.is_none() && ensure_gpu(app, ctx, idx, redraw_focus(&target_xf, &xf)))
+    {
         on_gpu = true;
-        app.perf.gpu = true;
+        if secondary.is_none() {
+            app.perf.gpu = true;
+        }
+        let shown = secondary_shown.as_ref().unwrap_or(doc);
+        let key = crate::gpu_canvas::CanvasTextureKey::from(crate::gpu_canvas::CompositeOutput { document: doc.id, window: secondary });
         // Shadow, checkerboard, document and pixel grid in one custom shader (gpu_canvas.rs).
         let params = crate::gpu_canvas::ViewParams {
-            doc: doc.id.0,
+            doc: key,
             doc_size: [doc.size.width, doc.size.height],
             zoom: point_zoom,
             center: xf.center,
             rotation: if view.rotation.is_finite() { view.rotation.to_radians() } else { 0.0 },
+            flip: secondary.is_some() && flip,
             shadow: {
                 let t = crate::theme::Tokens::get(ctx);
                 !t.bevel && !t.pro && drop_shadow
             },
             pixel_grid,
             view_key: egui::Id::unique(("pc-canvas", ctx.viewport_id(), idx)).value(),
-            display: sync_display_lut(app, doc, doc.id.0, output),
+            display: sync_display_lut(app, shown, key, output),
             output: output.unwrap_or(0),
             hdr: hdr_preview(app, doc),
             offset: [0.0, 0.0],
         };
-        if app.navigator_plain.contains(&doc.id) {
-            app.navigator_gpu.insert(doc.id, params);
-        } else {
-            app.navigator_gpu.remove(&doc.id);
+        if secondary.is_none() {
+            if app.navigator_plain.contains(&doc.id) {
+                app.navigator_gpu.insert(doc.id, params);
+            } else {
+                app.navigator_gpu.remove(&doc.id);
+            }
         }
         paint_gpu_view(painter, rect, params, &pattern);
     } else {
-        app.navigator_gpu.remove(&doc.id);
+        if secondary.is_none() {
+            app.navigator_gpu.remove(&doc.id);
+        }
         // A document too large for one full-resolution texture also gets the part in view at
         // the screen's resolution, drawn over the reduced whole (#7568).
         let in_view =
@@ -1350,8 +1370,8 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     });
     if panning {
         // The fist set with the pan above stays (#2196).
-    } else if crate::tool_cursor::pointer_elsewhere(ctx, &crate::panel_docking::native_viewports(app, ctx)) {
-        // The pointer is over a floating panel's own window; this window's last position of
+    } else if crate::tool_cursor::canvas_pointer_elsewhere(app, ctx) {
+        // The pointer is over another native window; this window's last position of
         // it is stale, so no tool cursor or brush outline is painted at it.
     } else if let Some((vertical, _)) = guide_hover {
         ui.ctx().set_cursor_icon(crate::rulers::guide_cursor(xf, vertical));

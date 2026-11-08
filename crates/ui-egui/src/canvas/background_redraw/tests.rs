@@ -37,7 +37,7 @@ fn kept(doc: &Arc<Document>, bytes: usize) -> Kept {
     let texels: Vec<Vec<u8>> = all.iter().map(|_| vec![1u8; bytes]).collect();
     Kept {
         doc: Arc::downgrade(doc),
-        id: doc.id,
+        output: doc.id.into(),
         display: 7,
         text_gamma: 1,
         format: eframe::wgpu::TextureFormat::Rgba8Unorm,
@@ -66,8 +66,8 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
     let mut cache = KeptComposites::default();
     cache.store(kept(&a, 4), &a, u64::MAX);
     // The same state hits, also as an equal document that isn't the same Arc (a restore after a solo).
-    assert!(cache.find(&a, 7, 1, Rgba8Unorm, &all).is_some());
-    assert!(cache.find(&Arc::new((*a).clone()), 7, 1, Rgba8Unorm, &all).is_some());
+    assert!(cache.find(a.id.into(), &a, 7, 1, Rgba8Unorm, &all).is_some());
+    assert!(cache.find(a.id.into(), &Arc::new((*a).clone()), 7, 1, Rgba8Unorm, &all).is_some());
     // Any change to what the composite depends on misses.
     let hidden = changed(&|d| d.layers[0].visible = false);
     let faded = changed(&|d| d.layers[0].opacity = 0.5);
@@ -78,19 +78,19 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
         }
     });
     for (what, d) in [("visibility", &hidden), ("opacity", &faded), ("blend mode", &multiplied), ("pixels", &painted)] {
-        assert!(cache.find(d, 7, 1, Rgba8Unorm, &all).is_none(), "{what} changed");
+        assert!(cache.find(a.id.into(), d, 7, 1, Rgba8Unorm, &all).is_none(), "{what} changed");
     }
-    assert!(cache.find(&a, 8, 1, Rgba8Unorm, &all).is_none(), "another display transform");
-    assert!(cache.find(&a, 7, 2, Rgba8Unorm, &all).is_none(), "another text gamma");
-    assert!(cache.find(&a, 7, 1, Rgba16Float, &all).is_none(), "another texture format");
-    assert!(cache.find(&a, 7, 1, Rgba8Unorm, &all[1..]).is_none(), "other blocks");
+    assert!(cache.find(a.id.into(), &a, 8, 1, Rgba8Unorm, &all).is_none(), "another display transform");
+    assert!(cache.find(a.id.into(), &a, 7, 2, Rgba8Unorm, &all).is_none(), "another text gamma");
+    assert!(cache.find(a.id.into(), &a, 7, 1, Rgba16Float, &all).is_none(), "another texture format");
+    assert!(cache.find(a.id.into(), &a, 7, 1, Rgba8Unorm, &all[1..]).is_none(), "other blocks");
     // At most KEEP entries, the least recently used going first.
     cache.store(kept(&hidden, 4), &hidden, u64::MAX);
-    assert!(cache.find(&a, 7, 1, Rgba8Unorm, &all).is_some());
+    assert!(cache.find(a.id.into(), &a, 7, 1, Rgba8Unorm, &all).is_some());
     cache.store(kept(&faded, 4), &faded, u64::MAX);
     assert_eq!(cache.entries.len(), KEEP);
-    assert!(cache.find(&hidden, 7, 1, Rgba8Unorm, &all).is_none(), "the least recently used went");
-    assert!(cache.find(&a, 7, 1, Rgba8Unorm, &all).is_some() && cache.find(&faded, 7, 1, Rgba8Unorm, &all).is_some());
+    assert!(cache.find(a.id.into(), &hidden, 7, 1, Rgba8Unorm, &all).is_none(), "the least recently used went");
+    assert!(cache.find(a.id.into(), &a, 7, 1, Rgba8Unorm, &all).is_some() && cache.find(a.id.into(), &faded, 7, 1, Rgba8Unorm, &all).is_some());
     // A stored entry makes the next frame take the cap again, over every kept document.
     cache.capped = (vec![(a.id, 1)], 1);
     cache.store(kept(&faded, 4), &faded, u64::MAX);
@@ -108,14 +108,14 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
     assert!(cache.entries.is_empty(), "over the cap");
     // A closed document's composites go.
     cache.store(kept(&a, 4), &a, u64::MAX);
-    cache.retain(|id| id != a.id);
+    cache.retain(|output| output.document != a.id);
     assert!(cache.entries.is_empty());
     // A state History no longer holds isn't kept alive: its entry is dead and goes.
     let gone = changed(&|d| d.layers[0].opacity = 0.25);
     cache.store(kept(&gone, 4), &gone, u64::MAX);
     let equal = Arc::new((*gone).clone());
     drop(gone);
-    assert!(cache.find(&equal, 7, 1, Rgba8Unorm, &all).is_none(), "no strong reference to the drawn state");
+    assert!(cache.find(a.id.into(), &equal, 7, 1, Rgba8Unorm, &all).is_none(), "no strong reference to the drawn state");
     cache.trim(u64::MAX);
     assert!(cache.entries.is_empty());
 }
@@ -198,7 +198,7 @@ fn a_full_cpu_refresh_draws_in_the_background_with_the_synchronous_pixels() {
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 2600, 1700);
     g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc), "the frame started a redraw instead of compositing inline");
+    assert!(g.harness.state().redraws.contains_key(&doc.into()), "the frame started a redraw instead of compositing inline");
     settle(&mut g);
     let app = g.harness.state();
     assert_eq!(app.perf.last_refresh, "background");
@@ -219,7 +219,7 @@ fn an_edit_during_a_redraw_is_not_overwritten_by_blocks_drawn_before_it() {
     let held = hold_redraws();
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
     g.harness.step();
-    let generation = g.harness.state().redraws.get(&doc).expect("the frame started a redraw").worker_generation;
+    let generation = g.harness.state().redraws.get(&doc.into()).expect("the frame started a redraw").worker_generation;
     assert!(
         wait_for_held_redraw(g.harness.state(), doc, generation, std::time::Duration::from_secs(10)),
         "the redraw worker never reached the pre-batch hold; an edit would race an unstarted redraw"
@@ -235,7 +235,7 @@ fn an_edit_during_a_redraw_is_not_overwritten_by_blocks_drawn_before_it() {
     assert_eq!(g.harness.state().perf.last_refresh, "rect", "the fill's damage was drawn synchronously");
     // Still running with blocks to draw, and drawing the edited document, not the state before it.
     let current = g.harness.state().session.active().expect("document").doc.clone();
-    let r = g.harness.state().redraws.get(&doc).expect("the redraw goes on");
+    let r = g.harness.state().redraws.get(&doc.into()).expect("the redraw goes on");
     assert!(r.pending.iter().any(|p| *p), "blocks are still to draw");
     assert!(Arc::ptr_eq(&r.doc, &current) || *r.doc == *current, "the blocks left draw the edit");
     drop(held);
@@ -256,7 +256,7 @@ fn an_edit_damaging_most_of_a_large_document_is_drawn_in_the_background_too() {
     g.harness.state_mut().run("edit.fill", json!({"color": "#22ee22"})).expect("fill");
     assert_eq!(g.harness.state().session.active().expect("document").last_damage, Some(Rect::new(0, 0, 2600, 1700)));
     g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc), "not composited inline: {}", g.harness.state().perf.last_refresh);
+    assert!(g.harness.state().redraws.contains_key(&doc.into()), "not composited inline: {}", g.harness.state().perf.last_refresh);
     settle(&mut g);
     assert_eq!(g.harness.state().perf.last_refresh, "background");
     assert_matches_synchronous(&mut g, doc);
@@ -282,7 +282,7 @@ fn showing_a_hidden_layer_again_reuses_the_redraw_from_before_it_was_hidden() {
     // check that one started, then that it was a composite rather than kept blocks.
     g.harness.state_mut().run("layer.setProps", json!({"layer": layer.0, "opacity": 0.3})).expect("opacity");
     g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc), "not served from kept blocks: {}", g.harness.state().perf.last_refresh);
+    assert!(g.harness.state().redraws.contains_key(&doc.into()), "not served from kept blocks: {}", g.harness.state().perf.last_refresh);
     settle(&mut g);
     assert_eq!(g.harness.state().perf.last_refresh, "background");
     assert_matches_synchronous(&mut g, doc);
@@ -296,7 +296,7 @@ fn a_redraw_finishing_after_memory_usage_drops_keeps_nothing_over_it() {
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
     g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc));
+    assert!(g.harness.state().redraws.contains_key(&doc.into()));
     // Less than the document's own pixels: nothing is left for kept composites.
     g.harness.state_mut().session.edit_prefs(|p| p.performance.memory_usage_mb = 1);
     settle(&mut g);
@@ -319,7 +319,7 @@ fn a_state_drawn_before_the_text_gamma_changed_is_composited_again() {
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
     g.harness.state_mut().run("layer.setProps", json!({"layer": layer.0, "visible": true})).expect("show");
     g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc), "served from blocks of the old gamma: {}", g.harness.state().perf.last_refresh);
+    assert!(g.harness.state().redraws.contains_key(&doc.into()), "served from blocks of the old gamma: {}", g.harness.state().perf.last_refresh);
     settle(&mut g);
     assert_eq!(g.harness.state().perf.last_refresh, "background");
     assert_matches_synchronous(&mut g, doc);
@@ -332,7 +332,7 @@ fn a_redraw_across_a_text_gamma_change_is_not_kept() {
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
     g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc));
+    assert!(g.harness.state().redraws.contains_key(&doc.into()));
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
     settle(&mut g);
     assert!(g.harness.state().kept.entries.is_empty(), "a composite of two gammas was kept");
@@ -349,7 +349,7 @@ fn a_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
     g.harness.step();
     g.harness.state_mut().session.color.settings.blend_text_gamma = gamma;
-    assert!(g.harness.state().redraws.contains_key(&doc), "the redraw finished before the change back");
+    assert!(g.harness.state().redraws.contains_key(&doc.into()), "the redraw finished before the change back");
     settle(&mut g);
     assert!(g.harness.state().kept.entries.is_empty(), "a composite of two gammas was kept");
 }
@@ -369,11 +369,11 @@ fn a_hidden_documents_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     g.harness.step();
     g.harness.state_mut().session.color.settings.blend_text_gamma = gamma;
     g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc), "the hidden document's redraw stopped");
+    assert!(g.harness.state().redraws.contains_key(&doc.into()), "the hidden document's redraw stopped");
     let i = g.harness.state().session.documents().iter().position(|st| st.doc.id == doc).expect("document");
     g.harness.state_mut().session.set_active(i);
     settle(&mut g);
-    assert!(g.harness.state().kept.entries.iter().all(|k| k.id != doc), "a composite of two gammas was kept");
+    assert!(g.harness.state().kept.entries.iter().all(|k| k.output.document != doc), "a composite of two gammas was kept");
 }
 
 /// Memory Usage lowered with no redraw running: the kept composites go at the next frame, not
@@ -434,7 +434,7 @@ fn an_older_kept_composite_goes_when_its_document_grows_past_the_cap() {
     settle(&mut g);
     let app = g.harness.state_mut();
     let held: Vec<_> = app.session.documents().iter().map(|st| st.doc.clone()).collect();
-    assert_eq!(app.kept.entries.iter().map(|k| k.id).collect::<Vec<_>>(), [b, a], "both kept, the second newest");
+    assert_eq!(app.kept.entries.iter().map(|k| k.output.document).collect::<Vec<_>>(), [b, a], "both kept, the second newest");
     let used = app.session.documents().iter().map(|st| st.memory_bytes() as u64).max().unwrap_or(0);
     let mb = (used + app.kept.bytes()).div_ceil(1 << 20) + 2;
     app.session.edit_prefs(|p| p.performance.memory_usage_mb = mb as _);
@@ -478,7 +478,7 @@ fn closing_the_document_stops_its_redraw() {
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
     g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc));
+    assert!(g.harness.state().redraws.contains_key(&doc.into()));
     g.harness.state_mut().run("file.close", json!({"save": false})).expect("close");
     g.harness.step();
     assert!(g.harness.state().redraws.is_empty());
@@ -521,7 +521,7 @@ fn hiding_a_large_layer_over_the_gpu_budget_redraws_in_the_background() {
     let damage = g.harness.state().session.active().expect("document").last_damage.expect("damage");
     assert!(damage != Rect::new(0, 0, 5000, 2000) && damage.width() as u64 * damage.height() as u64 >= crate::gpu_canvas::DEFER_PX, "{damage:?}");
     g.harness.step();
-    assert!(g.harness.state().redraws.contains_key(&doc), "not composited inline: {}", g.harness.state().perf.last_refresh);
+    assert!(g.harness.state().redraws.contains_key(&doc.into()), "not composited inline: {}", g.harness.state().perf.last_refresh);
     settle(&mut g);
     assert_eq!(g.harness.state().perf.last_refresh, "background");
     let app = g.harness.state();
@@ -625,4 +625,248 @@ fn a_flipped_view_records_why_it_draws_on_the_cpu() {
     g.harness.state_mut().ui.views[0].flip_horizontal = false;
     g.harness.run_steps(3);
     assert!(on_gpu_canvas(&g), "back on the GPU");
+}
+
+#[test]
+fn composite_output_storage_redraw_and_lifetimes_are_isolated() {
+    use crate::gpu_canvas::CompositeOutput;
+
+    let Some(mut g) = gpu_app() else { return };
+    let gpu = g.observer.clone();
+    let ctx = g.harness.ctx.clone();
+    let app = g.harness.state_mut();
+    app.run("file.new", json!({"width": 32, "height": 24, "background": "transparent"})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.sync_views();
+    let doc = app.session.active().unwrap().doc.clone();
+    let window = crate::menus::invoke(app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+    let main = CompositeOutput::from(doc.id);
+    let secondary = CompositeOutput { document: doc.id, window: Some(window) };
+    assert_ne!(crate::gpu_canvas::CanvasTextureKey::from(main), crate::gpu_canvas::CanvasTextureKey::from(secondary));
+
+    let bounds = doc.bounds();
+    let canonical = gpu.refresh_with(main, &doc, None, None, false);
+    assert_eq!(canonical.kind, "gpu-full", "{:?}", canonical.fallback);
+    let mut projected = (*doc).clone();
+    projected.layers[0].opacity = 0.5;
+    let projected = Arc::new(projected);
+    let child = gpu.refresh_with(secondary, &projected, None, None, false);
+    assert_eq!(child.kind, "gpu-full", "{:?}", child.fallback);
+    assert_eq!(child.uploads, 0, "the secondary should reuse the canonical layer upload");
+    let main_pixels = gpu.read_texels(main).unwrap();
+    let child_pixels = gpu.read_texels(secondary).unwrap();
+    assert_ne!(main_pixels, child_pixels);
+
+    // An output-specific CPU fallback can replace its own texture without touching Main.
+    start(app, &ctx, &gpu, secondary, projected.clone(), None, bounds, bounds, None);
+    assert!(app.redraws.contains_key(&secondary));
+    assert!(!app.redraws.contains_key(&main));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.redraws.contains_key(&secondary) {
+        poll(app, &gpu, secondary);
+        assert!(std::time::Instant::now() < deadline, "fallback redraw did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(gpu.read_texels(main).unwrap(), main_pixels);
+    assert!(app.kept.entries.iter().any(|entry| entry.output == secondary));
+
+    crate::view_visibility::set_follow_main_settings(app, &ctx, window, true);
+    assert!(gpu.read_texels(secondary).is_none());
+    assert!(app.kept.entries.iter().all(|entry| entry.output != secondary));
+
+    start(app, &ctx, &gpu, secondary, projected, None, bounds, bounds, None);
+    assert!(app.redraws.contains_key(&secondary));
+    app.ui.windows.iter_mut().find(|w| w.id == window).unwrap().open = false;
+    poll(app, &gpu, secondary);
+    crate::canvas::retain_gpu_documents(app);
+    assert!(!app.redraws.contains_key(&secondary));
+    assert!(gpu.read_texels(secondary).is_none());
+    assert_eq!(gpu.read_texels(main).unwrap(), main_pixels);
+    assert_eq!(gpu.refresh_with(main, &doc, None, None, false).uploads, 0, "closing a view must preserve shared source pages");
+
+    app.run("file.close", json!({"save": false})).unwrap();
+    crate::canvas::retain_gpu_documents(app);
+    assert!(gpu.read_texels(main).is_none());
+}
+
+#[test]
+fn shared_output_budget_and_secondary_allocation_failure() {
+    use crate::gpu_canvas::CompositeOutput;
+
+    let Some(mut g) = gpu_app() else { return };
+    let ctx = g.harness.ctx.clone();
+    let app = g.harness.state_mut();
+    let gpu = app.gpu.clone().unwrap();
+    app.run("file.new", json!({"width": 32, "height": 24, "background": "transparent"})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.sync_views();
+    let doc = app.session.active().unwrap().doc.clone();
+    let mode = app.session.prefs().performance.effective_rendering_mode();
+    let secondary = |app: &mut PhotocraftApp| {
+        let id = crate::menus::invoke(app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+        CompositeOutput { document: doc.id, window: Some(id) }
+    };
+    let main = CompositeOutput::from(doc.id);
+    let a = secondary(app);
+    let b = secondary(app);
+    let (bytes, _) = gpu.canvas_fit(&doc).unwrap();
+    gpu.set_canvas_budget(bytes * 2);
+    assert!(gpu.prepare_texture(main, &doc).is_some());
+    assert!(gpu.prepare_texture(a, &doc).is_some());
+    assert!(gpu.prepare_texture(b, &doc).is_none());
+    app.ui.windows.iter_mut().find(|w| Some(w.id) == a.window).unwrap().open = false;
+    crate::canvas::retain_gpu_documents(app);
+    assert!(gpu.texture_info(a).is_none());
+    assert!(gpu.prepare_texture(b, &doc).is_some());
+
+    gpu.discard_output(main);
+    let c = secondary(app);
+    assert!(gpu.prepare_texture(c, &doc).is_some());
+    assert!(gpu.prepare_texture(main, &doc).is_some(), "Main reclaims the secondary reservations");
+    assert!(gpu.texture_info(b).is_none() && gpu.texture_info(c).is_none());
+
+    gpu.set_canvas_budget(512 << 20);
+    assert_eq!(gpu.refresh_with(main, &doc, None, None, false).kind, "gpu-full");
+    let original = gpu.read_texels(main).unwrap();
+    gpu.discard_output(b);
+    gpu.fail_next_secondary_allocation();
+    let mut projection = (*doc).clone();
+    projection.layers[0].opacity = 0.5;
+    let refresh = gpu.refresh_with(b, &projection, None, None, false);
+    assert_eq!(refresh.kind, "full");
+    assert!(refresh.fallback.is_some());
+    let expected = photocraft_compose::flatten(&projection);
+    let (_, _, actual) = gpu.read_texels(b).unwrap();
+    assert!(actual.iter().zip(expected.px).all(|(actual, [r, g, b, a])| {
+        actual.iter().zip([r * a, g * a, b * a, a]).all(|(x, y)| (x - y).abs() < 1.0 / 255.0)
+    }));
+    assert_eq!(gpu.read_texels(main).unwrap(), original);
+    assert_eq!(gpu.canvas_fit(&doc).unwrap().1, 512 << 20);
+    assert_eq!(gpu.refresh_with(main, &doc, None, None, false).uploads, 0);
+    assert!(Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+    gpu.health().mark(photocraft_gpu::Fault::Lost("simulated device loss".into()));
+    for output in [main, b, b] {
+        assert_eq!(gpu.refresh_with(output, &doc, None, None, false).kind, "lost");
+    }
+    assert_eq!(app.session.prefs().performance.effective_rendering_mode(), mode);
+}
+
+#[test]
+fn secondary_gpu_refreshes_divergent_settings_and_shared_paint() {
+    use crate::gpu_canvas::CompositeOutput;
+
+    let Some(mut g) = gpu_app() else { return };
+    let ctx = g.harness.ctx.clone();
+    let app = g.harness.state_mut();
+    let gpu = app.gpu.clone().unwrap();
+    app.run("file.new", json!({"width": 64, "height": 48, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#617fa6"})).unwrap();
+    let raster = app.session.active().unwrap().active_layer.unwrap();
+    app.run("layer.newAdjustmentLayer.posterize", json!({})).unwrap();
+    let adjustment = app.session.active().unwrap().active_layer.unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    app.sync_views();
+
+    let open = |app: &mut PhotocraftApp| {
+        crate::menus::invoke(app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap()
+    };
+    let a = open(app);
+    let b = open(app);
+    let edit = |app: &mut PhotocraftApp, window, levels| {
+        crate::menus::invoke(app, &ctx, "view.layerAdjustment", json!({"window": window, "layer": adjustment.0, "params": {"levels": levels}})).unwrap();
+    };
+    edit(app, a, 2);
+    edit(app, b, 8);
+    for (id, params) in [
+        ("view.layerOpacity", json!({"window": b, "layer": raster.0, "opacity": 0.75})),
+        ("view.layerBlend", json!({"window": b, "layer": raster.0, "blend": "multiply"})),
+        ("view.layerVisibility", json!({"window": b, "layer": adjustment.0, "visible": true})),
+    ] {
+        crate::menus::invoke(app, &ctx, id, params).unwrap();
+    }
+    let output = |window| CompositeOutput { document: doc, window: Some(window) };
+    let draw = |app: &mut PhotocraftApp, window| {
+        let shown = app.with_document_window(window, |app| crate::canvas::ensure_secondary_gpu(app, 0)).unwrap().unwrap();
+        let (_, _, pixels) = gpu.read_texels(output(window)).unwrap();
+        let expected = photocraft_compose::flatten(&shown);
+        assert!(pixels.iter().zip(expected.px).all(|(p, [r, g, b, a])| {
+            p.iter().zip([r * a, g * a, b * a, a]).all(|(x, y)| (x - y).abs() <= 2.0 / 255.0)
+        }));
+        pixels
+    };
+    // Exercise the actual canvas dispatch with a child viewport ID as well as
+    // checking its refresh helper below. Reflection must leave its GPU output intact.
+    let viewport_id = egui::ViewportId::from_hash_of(("docwin", a));
+    let canvas_pass = |app: &mut PhotocraftApp| {
+        let mut input = egui::RawInput { viewport_id, ..Default::default() };
+        input.viewports.insert(viewport_id, Default::default());
+        let mut result = ctx.run_ui(input, |ui| {
+            app.with_document_window(a, |app| {
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(512.0, 384.0));
+                let camera = app.ui.views[0].clone();
+                crate::canvas::canvas_view(app, ui, 0, rect, camera, false);
+            });
+        });
+        result.textures_delta.clear();
+    };
+    app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().view.flip_horizontal = true;
+    canvas_pass(app);
+    let mirrored = gpu.read_texels(output(a)).expect("mirrored child GPU output");
+    assert!(gpu.upload_rect(output(a), [0, 0], [1, 1], &[3, 251, 29, 255]));
+    let marked = gpu.read_texels(output(a)).unwrap();
+    assert_ne!(marked, mirrored);
+    app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().view.flip_horizontal = false;
+    canvas_pass(app);
+    assert_eq!(gpu.read_texels(output(a)).unwrap(), marked, "a camera-only flip must not refresh the output");
+    app.ui.views[0].flip_horizontal = true;
+    app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().follow_main_flip = true;
+    canvas_pass(app);
+    assert_eq!(gpu.read_texels(output(a)).unwrap(), marked, "following Main must also reuse the output");
+    let child = app.ui.windows.iter_mut().find(|w| w.id == a).unwrap();
+    assert!(!child.view.flip_horizontal);
+    child.follow_main_flip = false;
+    app.ui.views[0].flip_horizontal = false;
+    gpu.discard_output(output(a));
+
+    let pa = draw(app, a);
+    let pb = draw(app, b);
+    assert_ne!(pa, pb);
+    edit(app, a, 5);
+    assert_ne!(draw(app, a), pa);
+    assert_eq!(draw(app, b), pb);
+
+    crate::view_visibility::set_follow_main_settings(app, &ctx, a, true);
+    let following = draw(app, a);
+    app.run("layer.setAdjustment", json!({"layer": adjustment.0, "levels": 3})).unwrap();
+    assert_ne!(draw(app, a), following);
+    assert_eq!(draw(app, b), pb);
+    crate::view_visibility::set_follow_main_settings(app, &ctx, a, false);
+    let prior_a = draw(app, a);
+    let prior_b = draw(app, b);
+    app.run("layer.select", json!({"layer": raster.0})).unwrap();
+    app.run("paint.stroke", json!({"points": [[12, 12]], "size": 10, "hardness": 1, "color": "#ff0000"})).unwrap();
+    assert_ne!(draw(app, a), prior_a);
+    assert_ne!(draw(app, b), prior_b);
+
+    let b_after_paint = draw(app, b);
+    gpu.discard_output(output(a));
+    gpu.fail_next_secondary_allocation();
+    draw(app, a); // The CPU fallback must publish A's composite to A's texture.
+    assert_eq!(draw(app, b), b_after_paint);
+
+    let (_, budget) = gpu.canvas_fit(&app.session.active().unwrap().doc).unwrap();
+    gpu.discard_output(output(a));
+    gpu.set_canvas_budget(0);
+    app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().view.flip_horizontal = true;
+    canvas_pass(app);
+    assert!(gpu.texture_info(output(a)).is_none());
+    assert!(app.view_composites.caches[&a].values().any(|cache| cache.texture.is_some()));
+    gpu.set_canvas_budget(budget);
+
+    app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().open = false;
+    crate::canvas::retain_gpu_documents(app);
+    crate::view_visibility::retain(app);
+    assert!(gpu.read_texels(output(a)).is_none());
+    assert!(gpu.read_texels(output(b)).is_some());
 }

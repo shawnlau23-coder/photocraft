@@ -70,7 +70,7 @@ pub(crate) fn hold_redraws() -> HoldRedraws {
 pub(crate) fn wait_for_held_redraw(app: &PhotocraftApp, doc: DocId, generation: u64, timeout: std::time::Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if let Some(r) = app.redraws.get(&doc)
+        if let Some(r) = app.redraws.get(&doc.into())
             && r.worker_generation == generation
             && r.reached_hold.load(Ordering::SeqCst)
         {
@@ -156,7 +156,7 @@ pub(crate) struct Kept {
     /// Weak, so a kept composite never keeps a state alive (and its tiles allocated, outside Memory
     /// Usage) once History has dropped it; such an entry is dead and goes at the next trim.
     doc: Weak<Document>,
-    id: DocId,
+    output: crate::gpu_canvas::CompositeOutput,
     display: u64,
     text_gamma: u32,
     format: eframe::wgpu::TextureFormat,
@@ -190,8 +190,8 @@ pub(crate) struct KeptComposites {
 
 impl KeptComposites {
     /// The kept redraw of exactly this state, now the newest.
-    fn find(&mut self, doc: &Arc<Document>, display: u64, text_gamma: u32, format: eframe::wgpu::TextureFormat, blocks: &[Rect]) -> Option<&Kept> {
-        let i = self.entries.iter().position(|k| k.matches(doc, display, text_gamma, format, blocks))?;
+    fn find(&mut self, output: crate::gpu_canvas::CompositeOutput, doc: &Arc<Document>, display: u64, text_gamma: u32, format: eframe::wgpu::TextureFormat, blocks: &[Rect]) -> Option<&Kept> {
+        let i = self.entries.iter().position(|k| k.output == output && k.matches(doc, display, text_gamma, format, blocks))?;
         let k = self.entries.remove(i)?;
         self.entries.push_front(k);
         self.entries.front()
@@ -202,7 +202,7 @@ impl KeptComposites {
     fn store(&mut self, k: Kept, doc: &Arc<Document>, cap: u64) {
         // Another list: [`retain`] takes the cap over all its documents again.
         self.capped = Default::default();
-        self.entries.retain(|e| !e.matches(doc, k.display, k.text_gamma, k.format, &k.blocks));
+        self.entries.retain(|e| e.output != k.output || !e.matches(doc, k.display, k.text_gamma, k.format, &k.blocks));
         self.entries.push_front(k);
         self.trim(cap);
     }
@@ -220,8 +220,8 @@ impl KeptComposites {
         self.entries.iter().fold(0, |n, k| n.saturating_add(k.bytes))
     }
 
-    fn retain(&mut self, live: impl Fn(DocId) -> bool) {
-        self.entries.retain(|k| live(k.id));
+    fn retain(&mut self, live: impl Fn(crate::gpu_canvas::CompositeOutput) -> bool) {
+        self.entries.retain(|k| live(k.output));
     }
 }
 
@@ -281,19 +281,23 @@ pub(crate) fn start(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
     gpu: &GpuCanvas,
+    output: crate::gpu_canvas::CompositeOutput,
     doc: Arc<Document>,
     display: Option<Arc<CanvasDisplay>>,
     visible: Rect,
     region: Rect,
     fallback: Option<crate::render_path::CpuReason>,
 ) {
+    if output.document != doc.id || !output_live(app, output) {
+        return;
+    }
     let all = blocks(doc.bounds());
     let display_key = display.as_deref().map_or(0, |d| d.texture_key);
     let gamma = text_gamma(app);
     // Taken again when a running redraw continues: the edit (or Memory Usage) may have changed it.
     let cap = keep_cap(app, doc.id);
     app.kept.trim(cap);
-    let (mut pending, since, fallback, mut keep) = match app.redraws.remove(&doc.id) {
+    let (mut pending, since, fallback, mut keep) = match app.redraws.remove(&output) {
         Some(mut old) if old.blocks == all => {
             // Blocks drawn from another state aren't part of this one's composite.
             let same = old.display == display_key && old.text_gamma == gamma && (Arc::ptr_eq(&old.doc, &doc) || *old.doc == *doc);
@@ -309,14 +313,14 @@ pub(crate) fn start(
     if !pending.contains(&true) {
         return;
     }
-    let Some(format) = gpu.prepare_texture(doc.id.0, &doc) else { return };
+    let Some(format) = gpu.prepare_texture(output, &doc) else { return };
     // This exact state was drawn a moment ago: upload its blocks rather than composite them.
-    if let Some(k) = app.kept.find(&doc, display_key, gamma, format, &all) {
+    if let Some(k) = app.kept.find(output, &doc, display_key, gamma, format, &all) {
         let t0 = crate::gpu_canvas::now_ms();
         let mut px = 0u64;
         for (i, p) in pending.iter_mut().enumerate() {
             if let (true, Some(b), Some(t)) = (*p, all.get(i), k.texels.get(i))
-                && gpu.upload_rect(doc.id.0, [b.x0 as u32, b.y0 as u32], [b.width(), b.height()], t)
+                && gpu.upload_rect(output, [b.x0 as u32, b.y0 as u32], [b.width(), b.height()], t)
             {
                 *p = false;
                 px = px.saturating_add(b.width() as u64 * b.height() as u64);
@@ -328,29 +332,35 @@ pub(crate) fn start(
         }
         keep = (vec![None; all.len()], 0, keep.2);
     }
-    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, keep });
+    spawn(app, ctx, Spawn { output, doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, keep });
 }
 
 /// After an edit drew its own damage: continue document `doc.id`'s redraw, if one is running, on
 /// the edited document, so blocks still to come don't bring back what was there before it.
-pub(crate) fn restart(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas, doc: Arc<Document>, display: Option<Arc<CanvasDisplay>>, visible: Rect) {
-    if app.redraws.contains_key(&doc.id) {
-        start(app, ctx, gpu, doc, display, visible, Rect::EMPTY, None);
+pub(crate) fn restart(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas, output: crate::gpu_canvas::CompositeOutput, doc: Arc<Document>, display: Option<Arc<CanvasDisplay>>, visible: Rect) {
+    if app.redraws.contains_key(&output) {
+        start(app, ctx, gpu, output, doc, display, visible, Rect::EMPTY, None);
     }
 }
 
 /// Upload the blocks document `doc`'s redraw has finished since the last frame. When the last one
 /// lands, the redraw is recorded like the synchronous refresh it replaces (and explained once if
 /// it was slow).
-pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
+pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, output: impl Into<crate::gpu_canvas::CompositeOutput>) {
+    let output = output.into();
+    if !output_live(app, output) {
+        app.redraws.remove(&output);
+        return;
+    }
+    let doc = output.document;
     let gamma = text_gamma(app);
-    let Some(r) = app.redraws.get_mut(&doc) else { return };
+    let Some(r) = app.redraws.get_mut(&output) else { return };
     r.forget_if_gamma_changed(gamma);
     loop {
         match r.rx.try_recv() {
             Ok(p) => {
                 let b = r.blocks[p.block];
-                if r.pending[p.block] && gpu.upload_rect(doc.0, [b.x0 as u32, b.y0 as u32], [b.width(), b.height()], &p.texels) {
+                if r.pending[p.block] && gpu.upload_rect(output, [b.x0 as u32, b.y0 as u32], [b.width(), b.height()], &p.texels) {
                     r.pending[p.block] = false;
                     r.left -= 1;
                     r.drawn += b.width() as u64 * b.height() as u64;
@@ -361,7 +371,7 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
             Err(TryRecvError::Disconnected) => break,
         }
     }
-    let Some(mut r) = app.redraws.remove(&doc) else { return };
+    let Some(mut r) = app.redraws.remove(&output) else { return };
     if r.left > 0 {
         log::warn!("canvas redraw stopped with {} of {} blocks left", r.left, r.blocks.len());
         return;
@@ -370,7 +380,7 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
         let texels = std::mem::take(&mut r.collected).into_iter().flatten().collect();
         let k = Kept {
             doc: Arc::downgrade(&r.doc),
-            id: r.doc.id,
+            output,
             display: r.display,
             text_gamma: r.text_gamma,
             format: r.format,
@@ -404,22 +414,43 @@ fn collect(r: &mut Redraw, p: Piece) {
 
 /// The active document's redraw in the status bar: "Redrawing" and how much is done.
 pub(crate) fn status(app: &PhotocraftApp, ui: &mut egui::Ui) {
-    let Some(r) = app.session.active().and_then(|st| app.redraws.get(&st.doc.id)) else { return };
+    let Some(r) = app.session.active().and_then(|st| app.redraws.get(&st.doc.id.into())) else { return };
     let t = crate::theme::Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(format!("{:.0}%", r.fraction() * 100.0)).color(t.text_dim).size(11.5).monospace());
     ui.label(egui::RichText::new(tl!("Redrawing")).color(t.text_dim).size(12.0));
 }
 
 /// Stop document `doc`'s redraw (its canvas was redrawn some other way, or is gone).
-pub(crate) fn cancel(app: &mut PhotocraftApp, doc: DocId) {
-    app.redraws.remove(&doc);
+pub(crate) fn cancel(app: &mut PhotocraftApp, output: impl Into<crate::gpu_canvas::CompositeOutput>) {
+    app.redraws.remove(&output.into());
 }
 
-/// Stop redraws of documents that are no longer open.
+pub(crate) fn invalidate_output(app: &mut PhotocraftApp, output: crate::gpu_canvas::CompositeOutput) {
+    cancel(app, output);
+    app.kept.retain(|candidate| candidate != output);
+    if let Some(gpu) = &app.gpu {
+        gpu.discard_output(output);
+    }
+}
+
+fn output_live(app: &PhotocraftApp, output: crate::gpu_canvas::CompositeOutput) -> bool {
+    if output.window.is_some() {
+        crate::view_visibility::secondary_outputs(app).any(|candidate| candidate == output)
+    } else {
+        app.session.documents().iter().any(|st| st.doc.id == output.document)
+    }
+}
+
+/// Stop redraws of outputs that are no longer open.
 pub(crate) fn retain(app: &mut PhotocraftApp) {
     let docs = app.session.documents();
-    app.redraws.retain(|id, _| docs.iter().any(|st| st.doc.id == *id));
-    app.kept.retain(|id| docs.iter().any(|st| st.doc.id == id));
+    let secondaries: Vec<_> = crate::view_visibility::secondary_outputs(app).collect();
+    let live = |output: crate::gpu_canvas::CompositeOutput| match output.window {
+        Some(_) => secondaries.contains(&output),
+        None => docs.iter().any(|st| st.doc.id == output.document),
+    };
+    app.redraws.retain(|output, _| live(*output));
+    app.kept.retain(live);
     let gamma = text_gamma(app);
     for r in app.redraws.values_mut() {
         r.forget_if_gamma_changed(gamma);
@@ -432,7 +463,7 @@ pub(crate) fn retain(app: &mut PhotocraftApp) {
         return;
     }
     let docs = app.session.documents();
-    let mut ids: Vec<(DocId, u64)> = app.kept.entries.iter().filter_map(|k| docs.iter().find(|st| st.doc.id == k.id).map(|st| (k.id, st.revision))).collect();
+    let mut ids: Vec<(DocId, u64)> = app.kept.entries.iter().filter_map(|k| docs.iter().find(|st| st.doc.id == k.output.document).map(|st| (k.output.document, st.revision))).collect();
     ids.dedup();
     let capped = (ids, app.session.prefs().performance.history_budget_bytes() as u64);
     if capped != app.kept.capped {
@@ -444,6 +475,7 @@ pub(crate) fn retain(app: &mut PhotocraftApp) {
 
 /// What [`spawn`] starts a redraw with.
 struct Spawn {
+    output: crate::gpu_canvas::CompositeOutput,
     doc: Arc<Document>,
     display: Option<Arc<CanvasDisplay>>,
     display_key: u64,
@@ -461,6 +493,7 @@ struct Spawn {
 
 fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
     let Spawn {
+        output,
         doc,
         display,
         display_key,
@@ -473,7 +506,6 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
         fallback,
         keep: (collected, collected_bytes, cap),
     } = s;
-    let id = doc.id;
     let kept_doc = doc.clone();
     let todo = order(&blocks, (0..blocks.len()).filter(|&i| pending[i]), visible);
     let left = todo.len();
@@ -502,7 +534,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
         return;
     }
     app.redraws.insert(
-        id,
+        output,
         Redraw {
             blocks,
             pending,

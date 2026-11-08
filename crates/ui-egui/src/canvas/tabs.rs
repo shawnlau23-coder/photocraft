@@ -791,7 +791,11 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         }
     }
+    let before = app.ui.windows.len();
     app.ui.windows.retain(|w| w.open);
+    if app.ui.windows.len() != before {
+        retain_gpu_documents(app);
+    }
     crate::view_visibility::retain(app);
 }
 

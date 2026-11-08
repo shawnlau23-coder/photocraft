@@ -9,7 +9,7 @@ use photocraft_geom::Rect;
 
 fn read_mips(gpu: &GpuCanvas, key: u64) -> Vec<Vec<[f32; 4]>> {
     let renderer = gpu.rs.renderer.read();
-    let doc = &renderer.callback_resources.get::<Resources>().unwrap().docs[&key];
+    let doc = &renderer.callback_resources.get::<Resources>().unwrap().docs[&key.into()];
     assert_eq!(doc.tiles.len(), 1);
     let tile = &doc.tiles[0];
     let (device, queue) = (&gpu.rs.device, &gpu.rs.queue);
@@ -80,14 +80,14 @@ fn canvas_textures_the_gpu_refuses_leave_it_working(gpu: &GpuCanvas) {
         let mut renderer = gpu.rs.renderer.write();
         let res = renderer.callback_resources.get_mut::<Resources>().unwrap();
         res.canvas_budget.store(u64::MAX, Ordering::Relaxed);
-        assert!(DocTextures::new(&gpu.rs.device, res, size, tile, FORMAT).is_none());
+        assert!(DocTextures::new(&gpu.rs.device, res, size, tile, FORMAT, true).is_none());
         let budget = res.canvas_budget.load(Ordering::Relaxed);
         assert!(budget < bytes, "{budget} >= {bytes}");
     }
     assert!(gpu.health.is_ok(), "{:?}", gpu.fault());
     // Smaller canvases still get GPU textures.
-    gpu.upload_buffer_full(3, &Buffer::filled(Rect::from_xywh(0, 0, 64, 64), [0.5, 0.5, 0.5, 1.0]), SampleType::U8);
-    assert!(gpu.rs.renderer.read().callback_resources.get::<Resources>().unwrap().docs.contains_key(&3));
+    gpu.upload_buffer_full(3u64, &Buffer::filled(Rect::from_xywh(0, 0, 64, 64), [0.5, 0.5, 0.5, 1.0]), SampleType::U8);
+    assert!(gpu.rs.renderer.read().callback_resources.get::<Resources>().unwrap().docs.contains_key(&3u64.into()));
     assert!(gpu.health.is_ok(), "{:?}", gpu.fault());
 }
 
@@ -96,7 +96,7 @@ fn check_mips(gpu: &GpuCanvas) {
         for (w, h) in [(1791, 1083), (513, 1), (1, 513)] {
             let mut full = Buffer::filled(Rect::from_xywh(0, 0, w, h), [0.25, 0.5, 0.75, 1.0]);
             // Reusing the key also covers replacing textures after a size or depth change.
-            gpu.upload_buffer_full(1, &full, depth);
+            gpu.upload_buffer_full(1u64, &full, depth);
             for (level, pixels) in read_mips(gpu, 1).iter().enumerate() {
                 for pixel in pixels {
                     assert!((pixel[3] - 1.0).abs() < 0.001, "{depth:?} {w}x{h} mip {level}: {pixel:?}");
@@ -107,13 +107,13 @@ fn check_mips(gpu: &GpuCanvas) {
             }
             let patch = Rect::from_xywh((w / 2) as i32, (h / 2) as i32, (w / 3).max(1), (h / 3).max(1));
             let changed = Buffer::filled(patch, [1.0, 0.0, 0.0, 1.0]);
-            assert!(gpu.upload_buffer_rect(1, &changed));
+            assert!(gpu.upload_buffer_rect(1u64, &changed));
             for y in patch.y0..patch.y1 {
                 for x in patch.x0..patch.x1 {
                     full.px[y as usize * w as usize + x as usize] = [1.0, 0.0, 0.0, 1.0];
                 }
             }
-            gpu.upload_buffer_full(2, &full, depth);
+            gpu.upload_buffer_full(2u64, &full, depth);
             let partial = read_mips(gpu, 1);
             let rebuilt = read_mips(gpu, 2);
             for (level, (actual, expected)) in partial.iter().zip(&rebuilt).enumerate() {
@@ -147,16 +147,16 @@ fn partial_updates_match_a_full_rebuild_at_every_mip_level() {
             let (x, y) = (i as u32 % w, i as u32 / w);
             *px = [x as f32 / w as f32, y as f32 / h as f32, ((x + y) % 7) as f32 / 7.0, 1.0];
         }
-        gpu.upload_buffer_full(1, &full, depth);
+        gpu.upload_buffer_full(1u64, &full, depth);
         let dabs = [Rect::from_xywh((w / 2) as i32, (h / 2) as i32, w / 3, h / 3), Rect::from_xywh(w as i32 - 1, h as i32 - 1, 1, 1)];
         for (dab, color) in dabs.into_iter().zip([[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]]) {
-            assert!(gpu.upload_buffer_rect(1, &Buffer::filled(dab, color)));
+            assert!(gpu.upload_buffer_rect(1u64, &Buffer::filled(dab, color)));
             for y in dab.y0..dab.y1 {
                 for x in dab.x0..dab.x1 {
                     full.px[y as usize * w as usize + x as usize] = color;
                 }
             }
-            gpu.upload_buffer_full(2, &full, depth);
+            gpu.upload_buffer_full(2u64, &full, depth);
             for (level, (partial, rebuilt)) in read_mips(&gpu, 1).iter().zip(&read_mips(&gpu, 2)).enumerate() {
                 let lw = (w >> level).max(1) as usize;
                 for (i, (a, b)) in partial.iter().zip(rebuilt).enumerate() {

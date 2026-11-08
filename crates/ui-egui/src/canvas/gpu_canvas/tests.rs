@@ -330,8 +330,8 @@ fn canvas_texture_bytes_price_every_tile_and_mip_level() {
 
 #[test]
 fn view_uniform_packs_rotation() {
-    assert_eq!(VIEW_FLOATS, 32);
-    assert_eq!(VIEW_UNIFORM_SIZE, 128);
+    assert_eq!(VIEW_FLOATS, 36);
+    assert_eq!(VIEW_UNIFORM_SIZE, 144);
     assert_eq!(VIEW_FLOATS * 4, VIEW_UNIFORM_SIZE as usize);
     assert!(gpu_view_ok(false, 0.0, 1.0));
     assert!(gpu_view_ok(false, 45.0_f32.to_radians(), 1.0));
@@ -395,5 +395,53 @@ fn shaders_validate() {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+}
+
+#[test]
+fn gpu_view_mirror_samples_the_same_texture_with_pan_rotation_and_clip() {
+    use crate::canvas::ViewXform;
+    use egui::{Pos2, Rect, vec2};
+
+    let _guard = photocraft_testkit::gpu_lock();
+    let state = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(wgpu_setup(), Default::default()));
+    let Ok(state) = state else { return };
+    let gpu = GpuCanvas::with_tile(&state, Some(64));
+    let size = [128, 48];
+    let rgba: Vec<u8> = (0..size[0] * size[1])
+        .flat_map(|i| if i % size[0] < 64 { [255, 0, 0, 255] } else { [0, 255, 0, 255] })
+        .collect();
+    gpu.upload_full(1u64, size, &rgba);
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(256.0, 192.0));
+    let clip = Rect::from_min_max(Pos2::new(30.0, 12.0), Pos2::new(230.0, 170.0));
+    let xf = ViewXform { rect, zoom: 1.5, center: [55.25, 27.75], flip: false, rotation: 27.0, aspect: 1.0 };
+    let params = ViewParams {
+        doc: 1u64.into(), doc_size: size, zoom: xf.zoom, center: xf.center,
+        rotation: xf.rotation.to_radians(), flip: false, shadow: false, pixel_grid: false,
+        view_key: 1, display: 0, output: 0, hdr: None, offset: [0.0, 0.0],
+    };
+    let renderer = egui_kittest::wgpu::WgpuTestRenderer::from_render_state(state);
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(rect.size())
+        .with_pixels_per_point(1.0)
+        .renderer(renderer)
+        .build_ui_state(move |ui, params| GpuCanvas::paint(&ui.painter().with_clip_rect(clip), rect, *params), params);
+
+    for flip in [false, true] {
+        harness.state_mut().flip = flip;
+        harness.run_steps(1);
+        let image = harness.render().unwrap();
+        let xf = ViewXform { flip, ..xf };
+        for (x, want) in [(24.0, [255, 0, 0]), (94.0, [0, 255, 0])] {
+            let at = xf.to_screen(x, 23.0);
+            assert!(clip.contains(at));
+            let px = image.get_pixel(at.x as u32, at.y as u32).0;
+            assert_eq!(&px[..3], &want, "flip={flip}, point={at:?}");
+            let doc = xf.to_doc(at);
+            assert!((doc[0] - f64::from(x)).abs() < 0.001 && (doc[1] - 23.0).abs() < 0.001);
+        }
+        let outside = image.get_pixel(10, 96).0;
+        assert_ne!(&outside[..3], &[255, 0, 0]);
+        assert_ne!(&outside[..3], &[0, 255, 0]);
     }
 }

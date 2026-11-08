@@ -8,6 +8,7 @@ struct View {
     f: vec4<f32>, // checker dark rgb, 32-bit preview gain (2^exposure; 0 = off)
     g: vec4<f32>, // gamut warning rgb, 32-bit preview 1 / gamma
     h: vec4<f32>, // cos, sin, center_doc_x, center_doc_y
+    mirror: vec4<f32>, // screen X sign, padding
 };
 struct Tile { r: vec4<f32> }; // x, y, w, h in doc px
 
@@ -67,12 +68,13 @@ fn doc_to_px(d: vec2<f32>) -> vec2<f32> {
     let cs = view.h.xy;
     let q = d - view.h.zw;
     let r = vec2(q.x * cs.x - q.y * cs.y, q.x * cs.y + q.y * cs.x);
-    return screen_center() + r * view.a.z;
+    return screen_center() + vec2(r.x * view.mirror.x, r.y) * view.a.z;
 }
 
 fn px_to_doc(p: vec2<f32>) -> vec2<f32> {
     let cs = view.h.xy;
-    let q = (p - screen_center()) / view.a.z;
+    let delta = (p - screen_center()) / view.a.z;
+    let q = vec2(delta.x * view.mirror.x, delta.y);
     return vec2(q.x * cs.x + q.y * cs.y, -q.x * cs.y + q.y * cs.x) + view.h.zw;
 }
 

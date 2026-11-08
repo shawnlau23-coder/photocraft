@@ -114,6 +114,10 @@ pub struct Compositor {
     /// Test hook ([`Compositor::fail_layer_allocs`]): how many more layer page textures fail as
     /// out of memory.
     fail_allocs: u32,
+    #[cfg(test)]
+    fail_before_encode: bool,
+    #[cfg(test)]
+    fail_after_encode: bool,
     acc_format: wgpu::TextureFormat,
     /// Whether the effect-map pipelines could be built (else documents with layer effects are
     /// [`Unsupported`] and use the CPU compositor).

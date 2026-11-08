@@ -140,6 +140,16 @@ fn native(ctx: &egui::Context) -> bool {
     cfg!(not(target_arch = "wasm32")) && ctx.viewport_id() == egui::ViewportId::ROOT && !scaled_wayland(ctx)
 }
 
+/// Document canvases participate in the same pointer handoff as floating panels.
+pub(super) fn canvas_pointer_elsewhere(app: &crate::PhotocraftApp, ctx: &egui::Context) -> bool {
+    let mut others = crate::panel_docking::native_viewports(app, ctx);
+    if !ctx.embed_viewports() && app.ui.windows.iter().any(|window| window.open) {
+        others.push(egui::ViewportId::ROOT);
+        others.extend(app.ui.windows.iter().filter(|window| window.open).map(|window| egui::ViewportId::from_hash_of(("docwin", window.id))));
+    }
+    pointer_elsewhere(ctx, &others)
+}
+
 /// Whether the pointer this viewport last saw has moved on to another of the app's windows,
 /// `others` (the current viewport among them is skipped): from the frame one of them reports the
 /// pointer arriving until this viewport gets a pointer event again. macOS sends a window no
@@ -165,7 +175,9 @@ pub(crate) fn pointer_elsewhere(ctx: &egui::Context, others: &[egui::ViewportId]
     // if this window's pointer lies inside that window: one just outside its edge, where both
     // may hear the pointer, stays this window's.
     let at = ctx.input(|i| i.viewport().inner_rect.zip(i.pointer.latest_pos()).map(|(r, p)| r.min + p.to_vec2()));
-    let there = separate && others.iter().any(|&v| v != own && ctx.input_for(v, |i| arrived(i) && (!here || covers(i.viewport().inner_rect, at))));
+    let time = ctx.input(|i| i.time);
+    let there = separate
+        && others.iter().any(|&v| v != own && ctx.input_for(v, |i| arrived(i) && (!here || (i.time >= time && covers(i.viewport().inner_rect, at)))));
     let now = separate && elsewhere(before, here, there);
     if now != before {
         ctx.data_mut(|d| d.insert_temp(key, now));

@@ -6,6 +6,13 @@ use super::paging::{OVER_BUDGET, cell_rect, first_error, grid_rect_count, grid_r
 use super::textures::{ChunkOut, FxKey, ResKey, Resident, Stats};
 use super::{Compositor, Document, LayerId, Plan, Rect, Surface, Unsupported, plan, timing};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailureScope {
+    Output,
+    SharedCaches,
+    Device,
+}
+
 impl Compositor {
     /// Composite `region` of `doc`. Each finished chunk is passed to `sink` while its encoder is
     /// still open; the chunk texture is reused afterwards, so the sink must record any copies
@@ -20,6 +27,7 @@ impl Compositor {
         region: Rect,
         mut sink: impl FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
     ) -> Result<Stats, Unsupported> {
+        let before = self.frame;
         let result = scoped_work(device, self.health.clone(), || {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose") });
             if self.timer.as_ref().is_some_and(timing::GpuTimer::busy) {
@@ -40,6 +48,10 @@ impl Compositor {
                 t.start(&mut encoder, r.width() as u64 * r.height() as u64);
             }
             let mut stats = self.encode_inner(device, queue, &mut encoder, doc, region, &mut sink, true);
+            #[cfg(test)]
+            if stats.is_ok() && std::mem::take(&mut self.fail_after_encode) {
+                stats = Err(Unsupported("injected failure after cache updates".into()));
+            }
             if let Ok(s) = &mut stats {
                 s.gpu_time = landed;
             }
@@ -66,7 +78,7 @@ impl Compositor {
             Ok(stats)
         });
         if result.is_err() {
-            self.discard_failed_work();
+            self.recover_failed_work(before);
         }
         result
     }
@@ -81,11 +93,25 @@ impl Compositor {
         region: Rect,
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
     ) -> Result<Stats, Unsupported> {
+        let before = self.frame;
         let result = scoped_work(device, self.health.clone(), || self.encode_inner(device, queue, encoder, doc, region, sink, false));
         if result.is_err() {
-            self.discard_failed_work();
+            self.recover_failed_work(before);
         }
         result
+    }
+
+    fn recover_failed_work(&mut self, before: u64) {
+        let scope = if self.fault().is_some() {
+            FailureScope::Device
+        } else if self.frame != before {
+            FailureScope::SharedCaches
+        } else {
+            FailureScope::Output
+        };
+        if scope != FailureScope::Output {
+            self.discard_failed_work();
+        }
     }
 
     fn discard_failed_work(&mut self) {
@@ -148,6 +174,11 @@ impl Compositor {
         for part in &cells {
             uniform_buffer_len(grid_rect_count(*part, self.chunk)?, plan.passes.len(), buffer_limit)?;
         }
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_before_encode) {
+            return Err(Unsupported("injected failure before cache updates".into()));
+        }
+        // Failure recovery uses this boundary: nothing above it publishes cache entries.
         if self.frame == 0 {
             // The first submission after device creation is dropped on some drivers (RADV),
             // which would render the first frame black; land it on an empty buffer instead.

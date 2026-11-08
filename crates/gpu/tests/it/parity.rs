@@ -3416,3 +3416,111 @@ fn sibling_compositors_have_independent_residency_and_configuration() {
     assert!(g.comp.resident_bytes() > 0);
     assert_ne!(g.comp.resident_budget(), sibling.resident_budget());
 }
+
+fn report_matrix_case(g: &mut Gpu, category: &str, name: &str, doc: &Document) {
+    let cpu = photocraft_compose::flatten(doc);
+    let gpu = match render_to_vec(&mut g.comp, &g.device, &g.queue, doc, doc.bounds()) {
+        Ok(pixels) => pixels,
+        Err(reason) => {
+            println!("MATRIX|{category}|{name}|CPU only|{reason}");
+            return;
+        }
+    };
+    assert_eq!(cpu.px.len(), gpu.len());
+    let (mut max, mut sum, mut over_one, mut over_two) = (0.0f32, 0.0f64, 0, 0);
+    for (a, b) in cpu.px.iter().zip(&gpu) {
+        for (x, y) in a.iter().zip(b) {
+            let error = (x - y).abs();
+            assert!(error.is_finite(), "{name} produced a nonfinite value");
+            max = max.max(error);
+            sum += f64::from(error);
+            over_one += usize::from(error > 1.0 / 255.0 + 4.0 * f32::EPSILON);
+            over_two += usize::from(error > 2.0 / 255.0 + 4.0 * f32::EPSILON);
+        }
+    }
+    let channels = gpu.len() * 4;
+    println!("MATRIX|{category}|{name}|GPU|{max:.9}|{sum:.9}|{channels}|{over_one}|{over_two}");
+}
+
+/// Diagnostic matrix deliberately reports unsupported and out-of-tolerance cases separately.
+#[test]
+#[ignore = "run explicitly to collect a GPU parity matrix"]
+fn independent_stack_parity_matrix() {
+    let Some(mut g) = gpu() else { panic!("GPU required to collect the parity matrix") };
+    let mut base = base_doc(256, 128);
+    let mut gradient = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    let bytes: Vec<_> = (0..128).flat_map(|y| (0..=255).flat_map(move |x| [x, 255 - x, y * 2, if y < 32 { 255 } else { x }])).collect();
+    gradient.write_interleaved(base.bounds(), &bytes);
+    base.layers[0] = Layer::new("ramp and alpha edges", LayerContent::Raster(gradient));
+    base.layers.push(noise_layer("detail", PixelFormat::RGBA8, Rect::new(8, 16, 248, 112), 41, 0.0));
+    report_matrix_case(&mut g, "blend", "Unadjusted source", &base);
+    for adj in adjustments().into_iter().chain([
+        Adjustment::Posterize { levels: 2 },
+        Adjustment::Posterize { levels: 12 },
+        Adjustment::Threshold { level: 0.1 },
+        Adjustment::Threshold { level: 0.9 },
+    ]) {
+        for (blend, masked) in [(BlendMode::Normal, false), (BlendMode::Multiply, true)] {
+            let mut doc = base.clone();
+            let label = adj.label().to_string();
+            let mut layer = Layer::new("test adjustment", LayerContent::Adjustment(adj.clone()));
+            layer.blend = blend;
+            if masked {
+                layer.opacity = 0.7;
+                layer.mask = Some(mask(Rect::new(0, 0, 256, 64), 19, 0.3));
+            }
+            doc.layers.push(layer);
+            report_matrix_case(&mut g, "adjustment", &label, &doc);
+        }
+    }
+    for mode in
+        [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen, BlendMode::Overlay, BlendMode::SoftLight, BlendMode::ColorDodge, BlendMode::Difference]
+    {
+        let mut doc = base.clone();
+        doc.layers[1].blend = mode;
+        doc.layers[1].opacity = 0.73;
+        doc.layers[1].mask = Some(mask(doc.bounds(), 17, 0.5));
+        report_matrix_case(&mut g, "blend", mode.label(), &doc);
+    }
+    let mut grouped = base.clone();
+    let mut upper = grouped.layers.pop().unwrap();
+    upper.clipped = true;
+    upper.blend = BlendMode::Overlay;
+    let mut lower = grouped.layers.pop().unwrap();
+    lower.mask = Some(mask(grouped.bounds(), 41, 0.3));
+    let mut group = Layer::group("isolated", vec![lower, upper]);
+    group.blend = BlendMode::Normal;
+    group.opacity = 0.7;
+    grouped.layers.push(group);
+    report_matrix_case(&mut g, "blend", "Masked clipping group", &grouped);
+
+    // Exact source texels from the 24 MP repro at (3002, 142). Its mask reveals
+    // this pixel fully. Keep this separate from the aggregate representative cases.
+    let mut boundary = Document::new("Posterize bin edge", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    for (mode, rgba) in [
+        (BlendMode::Normal, [186, 142, 52, 255]),
+        (BlendMode::Multiply, [217, 195, 125, 72]),
+        (BlendMode::Screen, [248, 248, 198, 72]),
+        (BlendMode::Normal, [23, 45, 15, 72]),
+    ] {
+        let mut surface = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+        surface.write_interleaved(boundary.bounds(), &rgba);
+        let mut layer = Layer::new("boundary source", LayerContent::Raster(surface));
+        layer.blend = mode;
+        boundary.layers.push(layer);
+    }
+    boundary.layers.push(Layer::new("Posterize", LayerContent::Adjustment(Adjustment::Posterize { levels: 12 })));
+    assert_eq!((photocraft_compose::flatten(&boundary).px[0][0] * 255.0).round(), 139.0);
+    report_matrix_case(&mut g, "boundary", "Posterize blended half-code", &boundary);
+
+    let mut hard_stop = base.clone();
+    hard_stop.layers.push(Layer::new(
+        "hard stop",
+        LayerContent::Adjustment(Adjustment::GradientMap {
+            stops: vec![(0.0, [0.0; 3]), (0.5, [0.0; 3]), (0.5, [1.0; 3]), (1.0, [1.0; 3])],
+            reverse: false,
+            dither: false,
+        }),
+    ));
+    report_matrix_case(&mut g, "fallback", "Gradient Map hard stop", &hard_stop);
+}

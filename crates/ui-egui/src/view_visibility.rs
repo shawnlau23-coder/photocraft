@@ -86,8 +86,16 @@ pub(crate) struct Composites {
     pub rendering_window: Option<u64>,
     pub caches: HashMap<u64, Caches>,
     pub channels: HashMap<u64, HashMap<u64, crate::channel_view::Cache>>,
+    pub gpu_frames: HashMap<crate::gpu_canvas::CompositeOutput, crate::canvas::SecondaryGpuFrame>,
     projections: HashMap<u64, Projection>,
     next_key: u64,
+}
+
+pub(crate) fn secondary_outputs(app: &PhotocraftApp) -> impl Iterator<Item = crate::gpu_canvas::CompositeOutput> + '_ {
+    app.ui.windows.iter().filter(|w| w.open).filter_map(|w| {
+        let document = app.session.documents().get(w.document)?.doc.id;
+        Some(crate::gpu_canvas::CompositeOutput { document, window: Some(w.id) })
+    })
 }
 
 pub(crate) fn focused_window(app: &PhotocraftApp) -> Option<u64> {
@@ -103,6 +111,11 @@ pub(crate) fn set_follow_main_settings(app: &mut PhotocraftApp, ctx: &egui::Cont
     let Some(w) = app.ui.windows.iter_mut().find(|w| w.id == window && w.open && w.follow_main_settings != follow) else { return };
     w.follow_main_settings = follow;
     w.visibility.invalidate_adjustment_targets();
+    if let Some(document) = app.session.documents().get(w.document).map(|st| st.doc.id) {
+        let output = crate::gpu_canvas::CompositeOutput { document, window: Some(window) };
+        crate::background_redraw::invalidate_output(app, output);
+        app.view_composites.gpu_frames.remove(&output);
+    }
     adjustments::prune(app);
     // Canonical preview keys and projection keys occupy different namespaces.
     app.view_composites.caches.remove(&window);
@@ -131,6 +144,8 @@ pub(crate) fn initialize(app: &mut PhotocraftApp, id: u64) {
 /// Also runs after native window closure, so textures and metadata cannot outlive a view.
 pub(crate) fn retain(app: &mut PhotocraftApp) {
     let live: Vec<u64> = app.ui.windows.iter().filter(|w| w.open && w.document < app.session.documents().len()).map(|w| w.id).collect();
+    let outputs: Vec<_> = secondary_outputs(app).collect();
+    app.view_composites.gpu_frames.retain(|output, _| outputs.contains(output));
     app.view_composites.caches.retain(|id, _| live.contains(id));
     app.view_composites.projections.retain(|id, _| live.contains(id));
     app.view_composites.channels.retain(|id, _| live.contains(id));

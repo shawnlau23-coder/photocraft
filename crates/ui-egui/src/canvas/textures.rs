@@ -463,6 +463,62 @@ pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
         .unwrap_or(0)
 }
 
+pub(crate) struct SecondaryGpuFrame {
+    canonical: std::sync::Weak<Document>,
+    revision: u64,
+    preview: u64,
+    display: u64,
+    drawn: bool,
+}
+
+/// Refresh an independent full-stack destination with the same source as the CPU canvas.
+/// Source pages remain shared and upload only changed tiles even when the stack is redrawn.
+pub(crate) fn ensure_secondary_gpu(app: &mut PhotocraftApp, idx: usize) -> Option<std::sync::Arc<Document>> {
+    use crate::gpu_canvas::{CompositeOutput, REFRESH_OVER_BUDGET};
+
+    let gpu = app.gpu.clone()?;
+    if gpu.fault().is_some() {
+        return None;
+    }
+    let window = app.view_composites.rendering_window?;
+    let st = app.session.documents().get(idx)?;
+    let canonical = std::sync::Arc::downgrade(&st.doc);
+    let revision = st.revision;
+    let bounds = st.doc.bounds();
+    let output = CompositeOutput { document: st.doc.id, window: Some(window) };
+    let (source, preview) = display_doc(app, idx);
+    let (shown, preview) = crate::view_visibility::render_document(app, idx, source, preview);
+    // Size-changing previews use the existing CPU viewport placement.
+    if shown.id != output.document || shown.bounds() != bounds {
+        return None;
+    }
+    let (display, _) = canvas_display(app, &shown, None);
+    let display_key = texture_key(display.as_deref());
+    let size = [shown.size.width, shown.size.height];
+    if let Some(frame) = app.view_composites.gpu_frames.get(&output)
+        && frame.canonical.ptr_eq(&canonical)
+        && (frame.revision, frame.preview, frame.display) == (revision, preview, display_key)
+    {
+        if !frame.drawn {
+            return None;
+        }
+        if gpu.has(output, size) {
+            return Some(shown);
+        }
+    }
+
+    // Publish only a complete refresh. A failed output uses the regular CPU canvas if
+    // a display texture cannot be allocated. Main's deferred preview coverage stays separate.
+    crate::background_redraw::cancel(app, output);
+    let refresh = gpu.refresh_with(output, &shown, None, display.as_deref(), false);
+    let drawn = !matches!(refresh.kind, "lost" | REFRESH_OVER_BUDGET) && gpu.has(output, size);
+    if !drawn {
+        gpu.discard_output(output);
+    }
+    app.view_composites.gpu_frames.insert(output, SecondaryGpuFrame { canonical, revision, preview, display: display_key, drawn });
+    drawn.then_some(shown)
+}
+
 /// GPU path: make sure document `idx` is current in the GPU canvas. Edits draw their damage;
 /// unchanged lower-stack composites can be reused by the compositor inside that region.
 /// Returns false if there is no GPU canvas.
@@ -575,7 +631,7 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     gpu_budget(app, &gpu, idx, partial, visible);
     app.perf.stage.damage_ms += crate::gpu_canvas::now_ms() - budget_start;
     let defer = crate::background_redraw::enabled(app);
-    let r = gpu.refresh_with(id.0, &doc, if partial { damage } else { None }, display.as_deref(), defer);
+    let r = gpu.refresh_with(id.into(), &doc, if partial { damage } else { None }, display.as_deref(), defer);
     app.perf.gpu_layer_fit = gpu.layer_fit();
     if r.kind == "lost" || r.kind == crate::gpu_canvas::REFRESH_OVER_BUDGET {
         // The device is gone (`gpu_status` then drops the GPU canvas) or the canvas is over the
@@ -589,10 +645,10 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     if r.kind == crate::gpu_canvas::REFRESH_DEFERRED {
         // Composited off the UI thread, the visible part first (#4024).
         let region = if partial { damage.unwrap_or(doc.bounds()) } else { doc.bounds() };
-        crate::background_redraw::start(app, ctx, &gpu, doc.clone(), display.clone(), visible, region, r.fallback.clone());
+        crate::background_redraw::start(app, ctx, &gpu, id.into(), doc.clone(), display.clone(), visible, region, r.fallback.clone());
     } else if partial {
         // The edit drew its damage; blocks of a running redraw still to come follow the edit.
-        crate::background_redraw::restart(app, ctx, &gpu, doc.clone(), display.clone(), visible);
+        crate::background_redraw::restart(app, ctx, &gpu, id.into(), doc.clone(), display.clone(), visible);
     } else {
         crate::background_redraw::cancel(app, id);
     }
@@ -690,7 +746,10 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
         // retaining only document ids freed the previews every frame (blank canvas while previewing).
         let mut live: Vec<u64> = app.session.documents().iter().flat_map(|st| [st.doc.id.0, st.doc.id.0 ^ (1u64 << 61), st.doc.id.0 ^ (1u64 << 62)]).collect();
         live.extend(crate::adjust_preview::gpu_keys(app));
-        gpu.retain(&live);
+        let documents: Vec<_> = app.session.documents().iter().map(|st| st.doc.id).collect();
+        let mut textures: Vec<_> = live.into_iter().map(crate::gpu_canvas::CanvasTextureKey::from).collect();
+        textures.extend(crate::view_visibility::secondary_outputs(app).map(crate::gpu_canvas::CanvasTextureKey::from));
+        gpu.retain(&textures, &documents);
     }
     crate::background_redraw::retain(app);
     // Upload markers must not outlive the resources they describe: native reopen can reuse

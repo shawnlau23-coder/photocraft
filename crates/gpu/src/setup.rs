@@ -160,6 +160,10 @@ impl Compositor {
             layer_alloc: None,
             admit_freed: 0,
             fail_allocs: 0,
+            #[cfg(test)]
+            fail_before_encode: false,
+            #[cfg(test)]
+            fail_after_encode: false,
             acc_format,
             effect_maps,
             cmyk: 0,
@@ -259,6 +263,19 @@ impl Compositor {
     /// The budget of layer pages, effect maps and lower-stack chunks (bytes).
     pub fn memory_budget(&self) -> u64 {
         self.resident_budget.saturating_add(self.fx_budget).saturating_add(self.prefix.budget())
+    }
+
+    /// Shared scratch and pattern memory outside the page/effect/prefix budget.
+    /// Includes enough accumulation slots for the prospective stack.
+    pub fn auxiliary_texture_bytes(&self, slots: u32) -> u64 {
+        let bpp = u64::from(self.acc_format.block_copy_size(None).unwrap_or(16));
+        let chunks = (self.pool.len() as u64).max(u64::from(slots));
+        let scratch = chunks.saturating_mul(u64::from(self.chunk).pow(2)).saturating_mul(bpp);
+        self.temps.iter().fold(scratch.saturating_add(self.pattern_cache_bytes()), |total, (tex, _)| {
+            let size = tex.texture.size();
+            let bpp = u64::from(tex.texture.format().block_copy_size(None).unwrap_or(16));
+            total.saturating_add(u64::from(size.width).saturating_mul(u64::from(size.height)).saturating_mul(bpp))
+        })
     }
 
     /// Bytes held by reusable lower-stack chunks, within the overall cache allowance.

@@ -254,6 +254,9 @@ pub(super) fn ensure_adjust_proxy(app: &mut PhotocraftApp, idx: usize, zoom: f32
         if let Some(t) = r.gpu {
             app.perf.record_gpu(t);
         }
+        if matches!(r.kind, "lost" | crate::gpu_canvas::REFRESH_OVER_BUDGET) || !gpu.has(key, size) {
+            return None;
+        }
         crate::adjust_preview::proxy_drawn(app, &frame);
     }
     Some((frame.k, key, size))
@@ -302,6 +305,9 @@ pub(super) fn ensure_proxy_preview(app: &mut PhotocraftApp, idx: usize, zoom: f3
         let (display, _) = canvas_display(app, &doc, None);
         app.gpu.as_ref()?.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buf), doc.depth);
         app.perf.record("proxy", p.size.area(), t1 - t0, crate::gpu_canvas::now_ms() - t1);
+        if !app.gpu.as_ref()?.has(key, [proxy.size.width, proxy.size.height]) {
+            return None;
+        }
         app.proxy_uploaded = Some((doc_id, hash));
     }
     Some((k, key, [proxy.size.width, proxy.size.height]))

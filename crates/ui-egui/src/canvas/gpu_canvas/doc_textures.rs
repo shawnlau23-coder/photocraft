@@ -35,12 +35,42 @@ pub(super) fn init_buffer(device: &wgpu::Device, label: &str, contents: &[u8], u
     buffer
 }
 
+impl Resources {
+    pub(super) fn output_fits(&self, key: super::CanvasTextureKey, bytes: u64, shared_extra: u64) -> bool {
+        let other = self.docs.iter().filter(|(candidate, _)| **candidate != key)
+            .fold(0u64, |sum, (_, texture)| sum.saturating_add(texture.bytes));
+        other.saturating_add(bytes).saturating_add(shared_extra) <= self.canvas_budget.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn allocate_output(
+        &mut self, device: &wgpu::Device, key: super::CanvasTextureKey, size: [u32; 2], tile: u32,
+        format: wgpu::TextureFormat, shared_extra: u64,
+    ) -> Option<DocTextures> {
+        let bytes = canvas_texture_bytes(size, tile, texel_bytes(format));
+        let secondary = matches!(key, super::CanvasTextureKey::Secondary { .. });
+        if !secondary && !self.output_fits(key, bytes, shared_extra) {
+            // Give the existing canvas/preview path priority over secondary destinations.
+            self.docs.retain(|candidate, _| !matches!(candidate, super::CanvasTextureKey::Secondary { .. }));
+        }
+        if !self.output_fits(key, bytes, shared_extra) {
+            return None;
+        }
+        #[cfg(test)]
+        if secondary && std::mem::take(&mut self.fail_secondary_allocation) {
+            return None;
+        }
+        // Drop the replaced reservation before allocating its replacement.
+        self.docs.remove(&key);
+        DocTextures::new(device, self, size, tile, format, !secondary)
+    }
+}
+
 impl DocTextures {
     /// The texture set for a `size` canvas, or `None` (nothing created) when it doesn't fit
     /// the canvas budget or the GPU's memory. A set the GPU can't hold (a 3 GP canvas is 16 GB
     /// of textures, #4017) lowers the budget below it, so that canvas and larger ones are drawn
     /// on the CPU canvas instead of the out-of-memory error disabling the GPU for the session.
-    pub(super) fn new(device: &wgpu::Device, res: &Resources, size: [u32; 2], tile: u32, format: wgpu::TextureFormat) -> Option<Self> {
+    pub(super) fn new(device: &wgpu::Device, res: &Resources, size: [u32; 2], tile: u32, format: wgpu::TextureFormat, lower_limit_on_error: bool) -> Option<Self> {
         let bytes = canvas_texture_bytes(size, tile, texel_bytes(format));
         if bytes > res.canvas_budget.load(Ordering::Relaxed) {
             return None;
@@ -58,7 +88,9 @@ impl DocTextures {
         }
         if let Some(e) = error {
             log::warn!("{} MB of canvas textures failed ({e}); larger canvases are drawn on the CPU", bytes >> 20);
-            res.canvas_budget.fetch_min(bytes.saturating_sub(1), Ordering::Relaxed);
+            if lower_limit_on_error {
+                res.canvas_budget.fetch_min(bytes.saturating_sub(1), Ordering::Relaxed);
+            }
             return None;
         }
         Some(set)
@@ -99,7 +131,7 @@ impl DocTextures {
                 tiles.push(Tile { rect: [tx, ty, w, h], texture, levels, bind_group, _uniform: uniform });
             }
         }
-        Self { size, format, tiles }
+        Self { size, format, tiles, bytes: canvas_texture_bytes(size, tile, texel_bytes(format)) }
     }
 
     /// Write `size` pixels at document `origin` from `texels` (in the texture format, row stride

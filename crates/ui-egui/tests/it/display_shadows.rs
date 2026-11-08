@@ -236,18 +236,19 @@ fn compare_display_paths_24mp() {
             [rgb[0], rgb[1], rgb[2], 255]
         })
         .collect();
-    gpu.upload_full(1, SIZE, &rgba);
+    gpu.upload_full(1u64, SIZE, &rgba);
     drop(rgba);
-    gpu.set_display_lut(1, 1, 33, Some(&lut));
+    gpu.set_display_lut(1u64, 1, 33, Some(&lut));
     gpu.set_display_matrix_shaper(1, 2, &shaper);
-    assert!(gpu.has(1, SIZE), "24 MP texture uploaded");
+    assert!(gpu.has(1u64, SIZE), "24 MP texture uploaded");
     let renderer = egui_kittest::wgpu::WgpuTestRenderer::from_render_state(rs);
     let params = ViewParams {
-        doc: 1,
+        doc: 1u64.into(),
         doc_size: SIZE,
         zoom: 1.0,
         center: [SIZE[0] as f32 / 2.0, SIZE[1] as f32 / 2.0],
         rotation: 0.0,
+        flip: false,
         shadow: false,
         pixel_grid: false,
         view_key: 0,

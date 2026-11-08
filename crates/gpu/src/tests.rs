@@ -388,3 +388,49 @@ fn colour_managed_tiles_match_the_per_pixel_conversion() {
 fn grid_rounds_out() {
     assert_eq!(tile_grid(Rect::new(0, 0, 300, 256)), Rect::new(0, 0, 512, 256));
 }
+
+#[test]
+fn shared_render_failure_preserves_or_rebuilds_residency_by_scope() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        eprintln!("skipping shared cache GPU test: no adapter");
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mut comp = Compositor::try_new_with_format(&device, Compositor::preferred_acc_format(&adapter)).unwrap();
+    let health = DeviceHealth::new();
+    comp.set_health(health.clone());
+    let mut doc = Document::new("failure fixture", photocraft_geom::Size::new(64, 64), photocraft_doc::ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::new(doc.pixel_format());
+    surface.fill_rect(doc.bounds(), &[0.2, 0.4, 0.6, 1.0]);
+    doc.layers.push(photocraft_doc::Layer::new("pixels", photocraft_doc::LayerContent::Raster(surface)));
+
+    let render = |comp: &mut Compositor, doc: &Document| {
+        let result = comp.render(&device, &queue, doc, doc.bounds(), |_, _| {});
+        device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+        result
+    };
+    assert!(render(&mut comp, &doc).unwrap().tiles_uploaded > 0);
+    let bytes = comp.resident_bytes();
+    comp.fail_before_encode = true;
+    assert!(render(&mut comp, &doc).unwrap_err().0.contains("before cache updates"));
+    assert_eq!(comp.resident_bytes(), bytes);
+    assert_eq!(render(&mut comp, &doc).unwrap().tiles_uploaded, 0);
+
+    let mut changed = doc.clone();
+    changed.layers[0].surface_mut().unwrap().fill_rect(doc.bounds(), &[0.9, 0.2, 0.1, 1.0]);
+    comp.fail_after_encode = true;
+    assert!(render(&mut comp, &changed).unwrap_err().0.contains("after cache updates"));
+    assert_eq!(comp.resident_bytes(), 0);
+    assert_eq!(comp.composite_cache_bytes(), 0);
+    assert!(health.is_ok());
+    let (pixels, stats) = render_to_vec_stats(&mut comp, &device, &queue, &doc, doc.bounds()).unwrap();
+    assert!(stats.tiles_uploaded > 0);
+    let expected = photocraft_compose::flatten(&doc);
+    assert!(pixels.iter().zip(expected.px).all(|(a, b)| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5)));
+
+    health.mark(Fault::Lost("simulated loss".into()));
+    assert!(render(&mut comp, &doc).is_err());
+    assert!(render(&mut comp, &doc).is_err());
+    assert_eq!(comp.resident_bytes(), 0);
+}

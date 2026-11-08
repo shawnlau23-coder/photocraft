@@ -2,7 +2,7 @@ use super::budget::{canvas_budget, physical_memory};
 use super::doc_textures::init_buffer;
 use super::shaders::{CANVAS_WGSL, ENCODE_WGSL, MIP_WGSL};
 use super::texels::LayerFit;
-use super::{FORMAT, FORMAT_HIGH, HashMap, NonZeroU64, TILE_UNIFORM_SIZE, VIEW_FLOATS, VIEW_UNIFORM_SIZE, wgpu};
+use super::{CanvasTextureKey, FORMAT, FORMAT_HIGH, HashMap, NonZeroU64, TILE_UNIFORM_SIZE, VIEW_FLOATS, VIEW_UNIFORM_SIZE, wgpu};
 
 pub(super) struct Resources {
     pub(super) view_bgl: wgpu::BindGroupLayout,
@@ -16,7 +16,7 @@ pub(super) struct Resources {
     mip_pipeline_high: Option<wgpu::RenderPipeline>,
     encode_pipeline_high: Option<wgpu::RenderPipeline>,
     pub(super) mip_sampler: wgpu::Sampler,
-    pub(super) docs: HashMap<u64, DocTextures>,
+    pub(super) docs: HashMap<CanvasTextureKey, DocTextures>,
     pub(super) views: HashMap<u64, ViewGpu>,
     pub(super) out_linear: bool,
     /// Build each mip level in a scratch texture and copy it back instead of rendering into
@@ -36,16 +36,18 @@ pub(super) struct Resources {
     pub(super) layer_fit: Option<LayerFit>,
     pub(super) compositor_cache_budget: Option<u64>,
     pub(super) compositor_focus: Option<photocraft_geom::Rect>,
-    /// GPU bytes one document's display texture set may take (see [`canvas_budget`]).
+    #[cfg(test)]
+    pub(super) fail_secondary_allocation: bool,
+    /// Combined allowance for resident display textures (see [`canvas_budget`]).
     pub(super) canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub(super) encode_bgl: wgpu::BindGroupLayout,
     encode_pipeline: wgpu::RenderPipeline,
     pub(super) lut_bgl: wgpu::BindGroupLayout,
     /// Display LUTs per (document, display) (monitor profile, Proof Colors / Gamut Warning);
     /// `identity_lut` otherwise.
-    pub(super) luts: HashMap<(u64, u32), wgpu::BindGroup>,
+    pub(super) luts: HashMap<(CanvasTextureKey, u32), wgpu::BindGroup>,
     /// Signatures belong to their renderer resources, including identity transforms (mode 0).
-    pub(super) display_lut_signatures: HashMap<(u64, u32), (u64, u8)>,
+    pub(super) display_lut_signatures: HashMap<(CanvasTextureKey, u32), (u64, u8)>,
     pub(super) identity_lut: wgpu::BindGroup,
     /// Transparency checkerboard and gamut warning colours (Preferences › Transparency & Gamut).
     pub(super) style: CanvasStyle,
@@ -148,12 +150,14 @@ pub(super) fn identity_lut_bytes() -> Vec<u8> {
 }
 
 pub(super) struct ViewGpu {
+    pub(super) texture: CanvasTextureKey,
     pub(super) buffer: wgpu::Buffer,
     pub(super) bind_group: wgpu::BindGroup,
     pub(super) frame_data: [f32; VIEW_FLOATS],
 }
 
 pub(super) struct DocTextures {
+    pub(super) bytes: u64,
     pub(super) size: [u32; 2],
     pub(super) format: wgpu::TextureFormat,
     pub(super) tiles: Vec<Tile>,
@@ -365,6 +369,8 @@ impl Resources {
             layer_fit: None,
             compositor_cache_budget: None,
             compositor_focus: None,
+            #[cfg(test)]
+            fail_secondary_allocation: false,
             canvas_budget: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(canvas_budget(physical_memory(), None))),
             encode_bgl,
             encode_pipeline,

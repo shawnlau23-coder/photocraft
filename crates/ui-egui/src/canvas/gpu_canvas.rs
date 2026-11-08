@@ -63,7 +63,9 @@ use doc_textures::init_buffer;
 use doc_textures::{mip_count, mip_damage};
 pub use perf::{GpuInfo, Perf, backend_name, now_ms};
 pub use resources::CanvasStyle;
-use resources::{DocTextures, Resources, identity_lut_bytes, lut_bind_group};
+#[cfg(test)]
+use resources::DocTextures;
+use resources::{Resources, identity_lut_bytes, lut_bind_group};
 #[cfg(test)]
 use setup::device_limits_for;
 use setup::texture_buffer;
@@ -91,21 +93,57 @@ const FORMAT_HIGH: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// documents (a 14000² one would need 2.1 GB) use `Rgba8Unorm`, so they stay on the GPU like
 /// 8-bit ones. `PHOTOCRAFT_CANVAS_F16=0` turns the float canvas off, `=1` ignores this budget.
 pub const F16_BUDGET_PX: u64 = 100_000_000;
-const VIEW_UNIFORM_SIZE: u64 = 128;
-const VIEW_FLOATS: usize = 32;
+const VIEW_UNIFORM_SIZE: u64 = 144;
+const VIEW_FLOATS: usize = 36;
 const TILE_UNIFORM_SIZE: u64 = 16;
 
-/// Whether this view can use the GPU canvas. Flip and non-square pixel aspect correction are
-/// still CPU blits (the shader's filtering assumes square pixels); rotation is a shader uniform.
+/// The legacy Main View flip and non-square pixel aspect still use the CPU canvas.
+/// Native secondaries apply reflection in the presentation shader.
 pub fn gpu_view_ok(flip: bool, _rotation: f32, aspect: f32) -> bool {
     !flip && (aspect - 1.0).abs() < 1e-6
+}
+
+/// A view's composite destination, separate from canonical source identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct CompositeOutput {
+    pub document: photocraft_doc::DocId,
+    pub window: Option<u64>,
+}
+
+impl From<photocraft_doc::DocId> for CompositeOutput {
+    fn from(document: photocraft_doc::DocId) -> Self {
+        Self { document, window: None }
+    }
+}
+
+/// Existing canonical and preview keys retain their storage. A secondary is
+/// tagged independently so numeric window IDs cannot collide with either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CanvasTextureKey {
+    Existing(u64),
+    Secondary { document: photocraft_doc::DocId, window: u64 },
+}
+
+impl From<u64> for CanvasTextureKey {
+    fn from(value: u64) -> Self {
+        Self::Existing(value)
+    }
+}
+
+impl From<CompositeOutput> for CanvasTextureKey {
+    fn from(value: CompositeOutput) -> Self {
+        match value.window {
+            Some(window) => Self::Secondary { document: value.document, window },
+            None => Self::Existing(value.document.0),
+        }
+    }
 }
 
 /// Parameters for drawing one document view. Positions are in egui points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewParams {
     /// Document key used with [`GpuCanvas::upload_full`].
-    pub doc: u64,
+    pub doc: CanvasTextureKey,
     /// Document size in pixels.
     pub doc_size: [u32; 2],
     /// Screen points per document pixel.
@@ -115,6 +153,8 @@ pub struct ViewParams {
     /// Camera rotation in radians, clockwise in Y-down screen space. Rotate around [`Self::center`]
     /// before sampling. Flip stays on the CPU path.
     pub rotation: f32,
+    /// Reflect screen X after rotation, around the viewport center.
+    pub flip: bool,
     /// Draw the drop shadow on the pasteboard.
     pub shadow: bool,
     /// Draw the pixel grid at high zoom.
@@ -320,16 +360,10 @@ impl GpuCanvas {
     }
 
     /// Format and GPU bytes (all tiles, all mip levels) of document `key`'s canvas texture.
-    pub fn texture_info(&self, key: u64) -> Option<(wgpu::TextureFormat, u64)> {
+    pub fn texture_info(&self, key: impl Into<CanvasTextureKey>) -> Option<(wgpu::TextureFormat, u64)> {
         let r = self.rs.renderer.read();
-        let d = r.callback_resources.get::<Resources>()?.docs.get(&key)?;
-        let bpp = texel_bytes(d.format);
-        let bytes = d
-            .tiles
-            .iter()
-            .map(|t| (0..t.levels.len() as u32).map(|l| ((t.rect[2] >> l).max(1) as u64) * ((t.rect[3] >> l).max(1) as u64) * bpp).sum::<u64>())
-            .sum();
-        Some((d.format, bytes))
+        let d = r.callback_resources.get::<Resources>()?.docs.get(&key.into())?;
+        Some((d.format, d.bytes))
     }
 
     /// Set the GPU memory the wgpu compositor may hold for layer pages and caches (see
@@ -375,6 +409,13 @@ impl GpuCanvas {
         if let Some(res) = r.callback_resources.get_mut::<Resources>() {
             res.compositor = None;
             res.compositor_failed = Some(photocraft_gpu::Unsupported(msg.into()));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_secondary_allocation(&self) {
+        if let Some(res) = self.rs.renderer.write().callback_resources.get_mut::<Resources>() {
+            res.fail_secondary_allocation = true;
         }
     }
 
@@ -473,9 +514,9 @@ impl GpuCanvas {
     }
 
     /// Whether document `doc` has been uploaded with this size.
-    pub fn has(&self, doc: u64, size: [u32; 2]) -> bool {
+    pub fn has(&self, doc: impl Into<CanvasTextureKey>, size: [u32; 2]) -> bool {
         let r = self.rs.renderer.read();
-        r.callback_resources.get::<Resources>().and_then(|res| res.docs.get(&doc)).is_some_and(|d| d.size == size)
+        r.callback_resources.get::<Resources>().and_then(|res| res.docs.get(&doc.into())).is_some_and(|d| d.size == size)
     }
 
     /// Whether [`GpuCanvas::composite`] would draw `doc` with the wgpu compositor (rather than
@@ -498,12 +539,12 @@ impl GpuCanvas {
 
     /// Replace the whole document image with an `Rgba8Unorm` texture. `rgba` is premultiplied
     /// RGBA8, `size[0] * size[1] * 4` bytes (anything else is ignored).
-    pub fn upload_full(&self, doc: u64, size: [u32; 2], rgba: &[u8]) {
-        self.upload_full_as(doc, size, FORMAT, rgba);
+    pub fn upload_full(&self, doc: impl Into<CanvasTextureKey>, size: [u32; 2], rgba: &[u8]) {
+        self.upload_full_as(doc.into(), size, FORMAT, rgba);
     }
 
     /// Replace the whole document image with a `format` texture of premultiplied `texels`.
-    fn upload_full_as(&self, doc: u64, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) {
+    fn upload_full_as(&self, doc: CanvasTextureKey, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) {
         if size[0] == 0 || size[1] == 0 || texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(format) || !self.health.is_ok() {
             return;
         }
@@ -511,7 +552,7 @@ impl GpuCanvas {
         let mut renderer = self.rs.renderer.write();
         let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
         if res.docs.get(&doc).is_none_or(|d| d.size != size || d.format != format) {
-            let Some(tex) = DocTextures::new(device, res, size, self.tile, format) else {
+            let Some(tex) = res.allocate_output(device, doc, size, self.tile, format, 0) else {
                 res.docs.remove(&doc);
                 return;
             };
@@ -525,14 +566,14 @@ impl GpuCanvas {
     /// Replace a rectangle `origin..origin+size` of an uploaded document with premultiplied texels
     /// in its texture format (`size[0] * size[1]` texels: RGBA8 or RGBA16F). Returns false if the
     /// document isn't uploaded, the rectangle doesn't fit or the buffer has the wrong size.
-    pub fn upload_rect(&self, doc: u64, origin: [u32; 2], size: [u32; 2], texels: &[u8]) -> bool {
+    pub fn upload_rect(&self, doc: impl Into<CanvasTextureKey>, origin: [u32; 2], size: [u32; 2], texels: &[u8]) -> bool {
         if !self.health.is_ok() {
             return false;
         }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut renderer = self.rs.renderer.write();
         let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
-        let Some(d) = res.docs.get(&doc) else { return false };
+        let Some(d) = res.docs.get(&doc.into()) else { return false };
         if texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(d.format)
             || origin[0].saturating_add(size[0]) > d.size[0]
             || origin[1].saturating_add(size[1]) > d.size[1]
@@ -548,22 +589,23 @@ impl GpuCanvas {
     }
 
     /// The texture format of uploaded document `doc`.
-    fn format_of(&self, doc: u64) -> Option<wgpu::TextureFormat> {
+    fn format_of(&self, doc: CanvasTextureKey) -> Option<wgpu::TextureFormat> {
         let r = self.rs.renderer.read();
         r.callback_resources.get::<Resources>().and_then(|res| res.docs.get(&doc)).map(|d| d.format)
     }
 
     /// Upload a CPU composite covering the whole document (a preview of a document of `depth`:
     /// see [`GpuCanvas::format_for`]).
-    pub fn upload_buffer_full(&self, doc: u64, buf: &photocraft_compose::Buffer, depth: photocraft_doc::SampleType) {
+    pub fn upload_buffer_full(&self, doc: impl Into<CanvasTextureKey>, buf: &photocraft_compose::Buffer, depth: photocraft_doc::SampleType) {
         let size = [buf.rect.width(), buf.rect.height()];
         let format = self.format_for(depth, size);
-        self.upload_full_as(doc, size, format, &texels(format, &buf.px));
+        self.upload_full_as(doc.into(), size, format, &texels(format, &buf.px));
     }
 
     /// Upload a CPU composite of a sub-rectangle (in document pixels, `buf.rect`).
-    pub fn upload_buffer_rect(&self, doc: u64, buf: &photocraft_compose::Buffer) -> bool {
+    pub fn upload_buffer_rect(&self, doc: impl Into<CanvasTextureKey>, buf: &photocraft_compose::Buffer) -> bool {
         let r = buf.rect;
+        let doc = doc.into();
         let Some(format) = self.format_of(doc) else { return false };
         if r.x0 < 0 || r.y0 < 0 {
             return false;
@@ -578,6 +620,16 @@ impl GpuCanvas {
     /// the CPU compositor.
     pub fn composite(
         &self,
+        doc: &photocraft_doc::Document,
+        region: photocraft_geom::Rect,
+        encode_srgb: bool,
+    ) -> Result<photocraft_gpu::Stats, photocraft_gpu::Unsupported> {
+        self.composite_output(doc.id.into(), doc, region, encode_srgb)
+    }
+
+    fn composite_output(
+        &self,
+        output: CompositeOutput,
         doc: &photocraft_doc::Document,
         region: photocraft_geom::Rect,
         encode_srgb: bool,
@@ -620,7 +672,7 @@ impl GpuCanvas {
             comp.set_composite_cache_budget(b);
         }
         comp.set_focus(res.compositor_focus);
-        let key = doc.id.0;
+        let key = CanvasTextureKey::from(output);
         let format = self.format_for(doc.depth, size);
         let fresh = res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format);
         let region = if fresh { doc.bounds() } else { region.intersect(&doc.bounds()) };
@@ -643,8 +695,26 @@ impl GpuCanvas {
                 return Err(photocraft_gpu::Unsupported(OVER_BUDGET.into()));
             }
         }
+        let mut shared_extra = 0;
+        if output.window.is_some() {
+            let slots = match photocraft_gpu::plan(doc) {
+                Ok(plan) => plan.slots,
+                Err(error) => {
+                    res.compositor = Some(comp);
+                    return Err(error);
+                }
+            };
+            // Layer pages, effects and stack prefixes already have one shared budget.
+            // Charge additional compositor textures once alongside resident outputs.
+            shared_extra = comp.auxiliary_texture_bytes(slots);
+            let bytes = canvas_texture_bytes(size, self.tile, texel_bytes(format));
+            if !res.output_fits(key, bytes, shared_extra) {
+                res.compositor = Some(comp);
+                return Err(photocraft_gpu::Unsupported(OVER_CANVAS_BUDGET.into()));
+            }
+        }
         if fresh {
-            let Some(tex) = DocTextures::new(device, res, size, self.tile, format) else {
+            let Some(tex) = res.allocate_output(device, key, size, self.tile, format, shared_extra) else {
                 res.docs.remove(&key);
                 res.compositor = Some(comp);
                 return Err(photocraft_gpu::Unsupported(OVER_CANVAS_BUDGET.into()));
@@ -715,7 +785,7 @@ impl GpuCanvas {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.health.wait(device, None);
             }
-        } else if fresh {
+        } else if fresh || output.window.is_some() {
             res.docs.remove(&key);
         }
         res.compositor = Some(comp);
@@ -734,15 +804,32 @@ impl GpuCanvas {
         damage: Option<photocraft_geom::Rect>,
         display: Option<&photocraft_engine::display_color::CanvasDisplay>,
     ) -> Refresh {
-        self.refresh_with(key, doc, damage, display, false)
+        self.refresh_texture(key.into(), (key == doc.id.0).then(|| doc.id.into()), doc, damage, display, false)
     }
 
     /// [`GpuCanvas::refresh`], except that with `defer`, a refresh of at least [`DEFER_PX`] the
     /// CPU compositor would draw is left to the caller (`background_redraw`): the texture is made
     /// ready (keeping what it shows when it already fits) and the kind is [`REFRESH_DEFERRED`].
-    pub fn refresh_with(
+    pub(crate) fn refresh_with(
         &self,
-        key: u64,
+        output: CompositeOutput,
+        doc: &photocraft_doc::Document,
+        damage: Option<photocraft_geom::Rect>,
+        display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+        defer: bool,
+    ) -> Refresh {
+        if output.document != doc.id {
+            return Refresh::default();
+        }
+        // Canonical damage can miss changes in an independent stack.
+        let damage = if output.window.is_some() { None } else { damage };
+        self.refresh_texture(output.into(), Some(output), doc, damage, display, defer)
+    }
+
+    fn refresh_texture(
+        &self,
+        key: CanvasTextureKey,
+        output: Option<CompositeOutput>,
         doc: &photocraft_doc::Document,
         damage: Option<photocraft_geom::Rect>,
         display: Option<&photocraft_engine::display_color::CanvasDisplay>,
@@ -774,7 +861,10 @@ impl GpuCanvas {
         }
         let region = damage.unwrap_or(bounds);
         let encode_srgb = display.is_some_and(|d| d.encode_srgb);
-        let gpu = if key == doc.id.0 { self.composite(doc, region, encode_srgb) } else { Err(photocraft_gpu::Unsupported("preview texture".into())) };
+        let gpu = match output {
+            Some(output) => self.composite_output(output, doc, region, encode_srgb),
+            None => Err(photocraft_gpu::Unsupported("preview texture".into())),
+        };
         match gpu {
             Ok(stats) => {
                 out.kind = if damage.is_some() { "gpu-rect" } else { "gpu-full" };
@@ -808,7 +898,17 @@ impl GpuCanvas {
                 return out;
             }
         }
-        self.upload_composite(key, doc, display);
+        if !self.upload_composite(key, doc, display) {
+            if let Some(fault) = self.fault() {
+                out.kind = "lost";
+                out.fallback = Some(CpuReason::from_fault(&fault));
+            } else {
+                out.kind = REFRESH_OVER_BUDGET;
+                let (bytes, budget) = self.canvas_fit(doc).unwrap_or_default();
+                out.fallback = Some(CpuReason::CanvasTooLarge { bytes, budget });
+            }
+            return out;
+        }
         out.kind = "full";
         out.px = bounds.width() as u64 * bounds.height() as u64;
         out.composite_ms = now_ms() - t0;
@@ -818,12 +918,13 @@ impl GpuCanvas {
     /// Composite the whole of `doc` with the CPU compositor into document `key`'s texture, band by
     /// band (each band converted and uploaded before the next is rendered), so a huge document
     /// never needs a full-size float composite or texture-format copy in memory.
-    pub fn upload_composite(&self, key: u64, doc: &photocraft_doc::Document, display: Option<&photocraft_engine::display_color::CanvasDisplay>) {
+    pub fn upload_composite(&self, key: impl Into<CanvasTextureKey>, doc: &photocraft_doc::Document, display: Option<&photocraft_engine::display_color::CanvasDisplay>) -> bool {
         let size = [doc.size.width, doc.size.height];
-        let Some(format) = self.prepare_texture(key, doc) else { return };
+        let key = key.into();
+        let Some(format) = self.prepare_texture(key, doc) else { return false };
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut rgba = Vec::new();
-        let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
+        let drawn = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
             if !self.health.is_ok() {
                 return Err(());
             }
@@ -837,20 +938,26 @@ impl GpuCanvas {
             self.health.poll(device);
             Ok(())
         });
-        if !self.health.is_ok() {
-            return;
+        if drawn.is_err() || !self.health.is_ok() {
+            if let Some(res) = self.rs.renderer.write().callback_resources.get_mut::<Resources>() {
+                res.docs.remove(&key);
+            }
+            return false;
         }
         let mut renderer = self.rs.renderer.write();
         if let Some(res) = renderer.callback_resources.get_mut::<Resources>()
             && let Some(d) = res.docs.get(&key)
         {
             d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
+            return true;
         }
+        false
     }
 
     /// Make sure document `key` has a display texture of `doc`'s size and format, keeping the one
     /// it has when that fits. Returns its format, or `None` when it can't be created.
-    pub fn prepare_texture(&self, key: u64, doc: &photocraft_doc::Document) -> Option<wgpu::TextureFormat> {
+    pub fn prepare_texture(&self, key: impl Into<CanvasTextureKey>, doc: &photocraft_doc::Document) -> Option<wgpu::TextureFormat> {
+        let key = key.into();
         let size = [doc.size.width, doc.size.height];
         if size[0] == 0 || size[1] == 0 || !self.health.is_ok() {
             return None;
@@ -858,8 +965,18 @@ impl GpuCanvas {
         let format = self.format_for(doc.depth, size);
         let mut renderer = self.rs.renderer.write();
         let res = renderer.callback_resources.get_mut::<Resources>()?;
+        let shared_extra = if matches!(key, CanvasTextureKey::Secondary { .. }) {
+            res.compositor.as_ref().map_or(0, |comp| comp.auxiliary_texture_bytes(0))
+        } else {
+            0
+        };
+        let bytes = canvas_texture_bytes(size, self.tile, texel_bytes(format));
+        if matches!(key, CanvasTextureKey::Secondary { .. }) && !res.output_fits(key, bytes, shared_extra) {
+            res.docs.remove(&key);
+            return None;
+        }
         if res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format) {
-            let Some(tex) = DocTextures::new(&self.rs.device, res, size, self.tile, format) else {
+            let Some(tex) = res.allocate_output(&self.rs.device, key, size, self.tile, format, shared_extra) else {
                 res.docs.remove(&key);
                 return None;
             };
@@ -868,8 +985,19 @@ impl GpuCanvas {
         Some(format)
     }
 
+    pub(crate) fn discard_output(&self, output: CompositeOutput) {
+        let key = CanvasTextureKey::from(output);
+        let mut renderer = self.rs.renderer.write();
+        if let Some(res) = renderer.callback_resources.get_mut::<Resources>() {
+            res.docs.remove(&key);
+            res.views.retain(|_, view| view.texture != key);
+            res.luts.retain(|(texture, _), _| *texture != key);
+            res.display_lut_signatures.retain(|(texture, _), _| *texture != key);
+        }
+    }
+
     /// Free textures, display LUTs and their signatures for documents not in `live`.
-    pub fn retain(&self, live: &[u64]) {
+    pub(crate) fn retain(&self, live: &[CanvasTextureKey], documents: &[photocraft_doc::DocId]) {
         let mut renderer = self.rs.renderer.write();
         let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
         if res.docs.keys().any(|k| !live.contains(k)) {
@@ -879,37 +1007,39 @@ impl GpuCanvas {
         // texture entry was dropped earlier (over budget, a failed render), which used to leave
         // their pages and effect maps resident after closing (#4529).
         if let Some(c) = res.compositor.as_mut() {
-            c.retain_docs(|d| live.contains(&d.0));
+            c.retain_docs(|d| documents.contains(&d));
         }
         // LUTs and identity-transform signatures can outlive document textures. Prune both,
         // or a preserved-ID reopen can skip rebuilding a missing LUT.
+        res.views.retain(|_, view| !matches!(view.texture, CanvasTextureKey::Secondary { .. }) || live.contains(&view.texture));
         res.luts.retain(|k, _| live.contains(&k.0));
         res.display_lut_signatures.retain(|k, _| live.contains(&k.0));
     }
 
-    pub(crate) fn display_lut_signature(&self, doc: u64, output: u32) -> Option<(u64, u8)> {
+    pub(crate) fn display_lut_signature(&self, doc: impl Into<CanvasTextureKey>, output: u32) -> Option<(u64, u8)> {
         let renderer = self.rs.renderer.read();
-        renderer.callback_resources.get::<Resources>()?.display_lut_signatures.get(&(doc, output)).copied()
+        renderer.callback_resources.get::<Resources>()?.display_lut_signatures.get(&(doc.into(), output)).copied()
     }
 
     /// Whether document `doc` has a display LUT for display `output` (tests).
     #[cfg(test)]
-    pub(crate) fn has_display_lut(&self, doc: u64, output: u32) -> bool {
+    pub(crate) fn has_display_lut(&self, doc: impl Into<CanvasTextureKey>, output: u32) -> bool {
         let renderer = self.rs.renderer.read();
-        renderer.callback_resources.get::<Resources>().is_some_and(|r| r.luts.contains_key(&(doc, output)))
+        renderer.callback_resources.get::<Resources>().is_some_and(|r| r.luts.contains_key(&(doc.into(), output)))
     }
 
-    pub(crate) fn cache_display_lut_signature(&self, doc: u64, output: u32, signature: u64, mode: u8) {
+    pub(crate) fn cache_display_lut_signature(&self, doc: impl Into<CanvasTextureKey>, output: u32, signature: u64, mode: u8) {
         let mut renderer = self.rs.renderer.write();
         if let Some(res) = renderer.callback_resources.get_mut::<Resources>() {
-            res.display_lut_signatures.insert((doc, output), (signature, mode));
+            res.display_lut_signatures.insert((doc.into(), output), (signature, mode));
         }
     }
 
     /// Set (or clear with `None`) the display LUT of document `doc` on display `output`:
     /// `size`³ RGBA8 texels, red fastest. RGB is the display colour for each lattice input;
     /// alpha 255 marks out-of-gamut colours for the gamut warning.
-    pub fn set_display_lut(&self, doc: u64, output: u32, size: u32, rgba: Option<&[u8]>) {
+    pub fn set_display_lut(&self, doc: impl Into<CanvasTextureKey>, output: u32, size: u32, rgba: Option<&[u8]>) {
+        let doc = doc.into();
         if !self.health.is_ok() {
             return;
         }
@@ -934,7 +1064,8 @@ impl GpuCanvas {
 
     /// Set a separately sampled curve/matrix/curve display transform. CMS validates this
     /// representation and provides bounded tables; no profile interpretation lives in the UI.
-    pub fn set_display_matrix_shaper(&self, doc: u64, output: u32, shaper: &photocraft_cms::GpuMatrixShaper) {
+    pub fn set_display_matrix_shaper(&self, doc: impl Into<CanvasTextureKey>, output: u32, shaper: &photocraft_cms::GpuMatrixShaper) {
+        let doc = doc.into();
         if !self.health.is_ok() {
             return;
         }
@@ -949,13 +1080,13 @@ impl GpuCanvas {
     /// (premultiplied) texels as `f32` RGBA, row-major. Waits for the GPU; for tests, benchmarks
     /// and debugging.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn read_texels(&self, key: u64) -> Option<(wgpu::TextureFormat, [u32; 2], Vec<[f32; 4]>)> {
+    pub fn read_texels(&self, key: impl Into<CanvasTextureKey>) -> Option<(wgpu::TextureFormat, [u32; 2], Vec<[f32; 4]>)> {
         if !self.health.is_ok() {
             return None;
         }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let renderer = self.rs.renderer.read();
-        let d = renderer.callback_resources.get::<Resources>()?.docs.get(&key)?;
+        let d = renderer.callback_resources.get::<Resources>()?.docs.get(&key.into())?;
         let bpp = texel_bytes(d.format);
         let (w, h) = (d.size[0] as usize, d.size[1] as usize);
         let mut out = vec![[0.0f32; 4]; w.checked_mul(h)?];
