@@ -509,6 +509,10 @@ pub(crate) fn handle_forwarded(app: &mut PhotocraftApp, ctx: &egui::Context, eve
 /// once the main window or no window of the app has the keyboard, or one of its widgets takes
 /// keyboard focus, so the keys count as released then.
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if let Some(id) = crate::canvas::docked_view::focused(app) {
+        app.with_document_window(id, |app| document_window_view_keys(app, ctx));
+        return;
+    }
     if app.ui.focused_window.is_some() && !ctx.input(|i| i.focused) {
         return;
     }

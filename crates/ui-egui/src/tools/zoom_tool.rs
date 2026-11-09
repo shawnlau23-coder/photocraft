@@ -53,15 +53,16 @@ pub fn anchor_view(view: &mut View, xf: &ViewXform, screen: Pos2, doc: [f64; 2],
 /// Route the canvas buttons for the Zoom tool. Returns true when it consumed the drag (the
 /// canvas then handles only the click).
 pub fn drag(app: &PhotocraftApp, ctx: &egui::Context, view: &mut View, xf: &ViewXform, b: &Buttons, pointer: Option<Pos2>) -> bool {
+    let drag_id = app.view_composites.rendering_window.map_or_else(id, |window| id().with((window, ctx.viewport_id())));
     let scrubby = app.ui.tool_options.zoom_scrubby;
     if b.started {
         let anchor = ctx.input(|i| i.pointer.press_origin()).filter(|p| xf.rect.contains(*p)).or(pointer);
         if let Some(anchor) = anchor {
             let z = ZoomDrag { anchor, doc: xf.to_doc(anchor), zoom0: view.zoom, rect_to: (!scrubby).then_some(anchor) };
-            ctx.data_mut(|d| d.insert_temp(id(), z));
+            ctx.data_mut(|d| d.insert_temp(drag_id, z));
         }
     }
-    let Some(mut z) = ctx.data(|d| d.get_temp::<ZoomDrag>(id())) else { return b.started || b.dragged || b.stopped };
+    let Some(mut z) = ctx.data(|d| d.get_temp::<ZoomDrag>(drag_id)) else { return b.started || b.dragged || b.stopped };
     if let Some(p) = pointer.filter(|_| b.dragged || b.stopped) {
         match z.rect_to.as_mut() {
             Some(to) => *to = p,
@@ -74,10 +75,10 @@ pub fn drag(app: &PhotocraftApp, ctx: &egui::Context, view: &mut View, xf: &View
                 }
             }
         }
-        ctx.data_mut(|d| d.insert_temp(id(), z));
+        ctx.data_mut(|d| d.insert_temp(drag_id, z));
     }
     if b.stopped {
-        ctx.data_mut(|d| d.remove::<ZoomDrag>(id()));
+        ctx.data_mut(|d| d.remove::<ZoomDrag>(drag_id));
         if let Some(to) = z.rect_to {
             let out = crate::workspace_ui::sticky_mods(app, ctx.input(|i| i.modifiers)).alt;
             zoom_to_rect(view, xf, Rect::from_two_pos(z.anchor, to), z.anchor, out, app.ppp);

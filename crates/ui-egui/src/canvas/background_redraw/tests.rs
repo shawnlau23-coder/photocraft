@@ -798,7 +798,7 @@ fn secondary_gpu_refreshes_divergent_settings_and_shared_paint() {
     // Exercise the actual canvas dispatch with a child viewport ID as well as
     // checking its refresh helper below. Reflection must leave its GPU output intact.
     let viewport_id = egui::ViewportId::from_hash_of(("docwin", a));
-    let canvas_pass = |app: &mut PhotocraftApp| {
+    let canvas_pass = |app: &mut PhotocraftApp, viewport_id| {
         let mut input = egui::RawInput { viewport_id, ..Default::default() };
         input.viewports.insert(viewport_id, Default::default());
         let mut result = ctx.run_ui(input, |ui| {
@@ -811,21 +811,44 @@ fn secondary_gpu_refreshes_divergent_settings_and_shared_paint() {
         result.textures_delta.clear();
     };
     app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().view.flip_horizontal = true;
-    canvas_pass(app);
-    let mirrored = gpu.read_texels(output(a)).expect("mirrored child GPU output");
+    canvas_pass(app, viewport_id);
+    let window = app.ui.windows.iter().find(|w| w.id == a).unwrap().clone();
+    crate::canvas::docked_view::dock(app, &ctx, &window, crate::canvas::docked_view::Side::Right);
+    let other = app.ui.windows.iter().find(|w| w.id == b).unwrap().clone();
+    crate::canvas::docked_view::dock(app, &ctx, &other, crate::canvas::docked_view::Side::Top);
+    gpu.discard_output(output(a));
+    gpu.discard_output(output(b));
+    let mut root = ctx.run_ui(egui::RawInput::default(), |ui| {
+        for (id, x) in [(a, 0.0), (b, 260.0)] {
+            app.with_document_window(id, |app| {
+                let rect = egui::Rect::from_min_size(egui::pos2(x, 0.0), egui::vec2(256.0, 192.0));
+                let camera = app.ui.views[0].clone();
+                crate::canvas::canvas_view(app, ui, 0, rect, camera, false);
+            });
+        }
+    });
+    root.textures_delta.clear();
+    assert_ne!(gpu.read_texels(output(a)).unwrap(), gpu.read_texels(output(b)).unwrap());
+    let other_output = gpu.read_texels(output(b)).unwrap();
+    crate::canvas::docked_view::detach(app, &ctx, b, false);
+    assert_eq!(gpu.read_texels(output(b)).unwrap(), other_output);
+    let mirrored = gpu.read_texels(output(a)).expect("mirrored docked GPU output in root viewport");
+    crate::canvas::docked_view::detach(app, &ctx, a, false);
+    canvas_pass(app, viewport_id);
+    assert_eq!(gpu.read_texels(output(a)).unwrap(), mirrored, "floating must keep the composite output");
     assert!(gpu.upload_rect(output(a), [0, 0], [1, 1], &[3, 251, 29, 255]));
     let marked = gpu.read_texels(output(a)).unwrap();
     assert_ne!(marked, mirrored);
     app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().view.flip_horizontal = false;
-    canvas_pass(app);
+    canvas_pass(app, viewport_id);
     assert_eq!(gpu.read_texels(output(a)).unwrap(), marked, "a camera-only flip must not refresh the output");
     app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().view.flip_vertical = true;
-    canvas_pass(app);
+    canvas_pass(app, viewport_id);
     assert_eq!(gpu.read_texels(output(a)).unwrap(), marked, "vertical flip must reuse the output");
     app.ui.views[0].flip_horizontal = true;
     app.ui.views[0].flip_vertical = true;
     app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().follow_main_flip = true;
-    canvas_pass(app);
+    canvas_pass(app, viewport_id);
     assert_eq!(gpu.read_texels(output(a)).unwrap(), marked, "following Main must also reuse the output");
     let child = app.ui.windows.iter_mut().find(|w| w.id == a).unwrap();
     assert!(!child.view.flip_horizontal);
@@ -866,7 +889,7 @@ fn secondary_gpu_refreshes_divergent_settings_and_shared_paint() {
     gpu.discard_output(output(a));
     gpu.set_canvas_budget(0);
     app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().view.flip_horizontal = true;
-    canvas_pass(app);
+    canvas_pass(app, viewport_id);
     assert!(gpu.texture_info(output(a)).is_none());
     assert!(app.view_composites.caches[&a].values().any(|cache| cache.texture.is_some()));
     gpu.set_canvas_budget(budget);

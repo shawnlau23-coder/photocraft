@@ -46,6 +46,7 @@ pub mod snap_ui;
 mod start_screen;
 mod strokes;
 mod tabs;
+pub(crate) mod docked_view;
 mod textures;
 pub(super) mod tile_overlay;
 pub(super) mod tool_cursor;
@@ -203,6 +204,13 @@ pub fn mode_label(doc: &Document) -> &'static str {
         photocraft_doc::ColorMode::Bitmap => "Bitmap",
         photocraft_doc::ColorMode::Duotone => "Duotone",
         photocraft_doc::ColorMode::Multichannel => "Multichannel",
+    }
+}
+
+pub(super) fn gpu_presentation_key(viewport: egui::ViewportId, idx: usize, secondary: Option<u64>, proxy: bool) -> u64 {
+    match secondary {
+        Some(id) => egui::Id::unique(("pc-secondary-canvas", id, proxy)).value(),
+        None => egui::Id::unique(("pc-document-canvas", viewport, idx, proxy)).value(),
     }
 }
 
@@ -385,8 +393,9 @@ fn paint_canvas(
     // Native secondary reflection is a presentation uniform. Main keeps its legacy
     // flip path, and non-square pixels still use the CPU canvas.
     let secondary = app.view_composites.rendering_window;
-    let native_canvas = secondary.is_none() || ctx.viewport_id() != egui::ViewportId::ROOT;
-    let gpu_ok = native_canvas && crate::gpu_canvas::gpu_view_ok((flip || flip_vertical) && secondary.is_none(), view.rotation, aspect);
+    let gpu_host = secondary.is_none() || ctx.viewport_id() != egui::ViewportId::ROOT
+        || secondary.is_some_and(|id| docked_view::contains(app, id));
+    let gpu_ok = gpu_host && crate::gpu_canvas::gpu_view_ok((flip || flip_vertical) && secondary.is_none(), view.rotation, aspect);
     if secondary.is_none() && app.gpu.is_some() {
         if gpu_ok {
             crate::render_path::view_ok(app, doc.id.0);
@@ -424,7 +433,7 @@ fn paint_canvas(
                 !t.bevel && !t.pro && drop_shadow
             },
             pixel_grid: false,
-            view_key: egui::Id::unique(("pc-canvas-proxy", ctx.viewport_id(), idx)).value(),
+            view_key: gpu_presentation_key(ctx.viewport_id(), idx, secondary, true),
             display: sync_display_lut(app, &shown, key, output),
             output: output.unwrap_or(0),
             hdr: hdr_preview(app, doc),
@@ -454,7 +463,7 @@ fn paint_canvas(
                 !t.bevel && !t.pro && drop_shadow
             },
             pixel_grid,
-            view_key: egui::Id::unique(("pc-canvas", ctx.viewport_id(), idx)).value(),
+            view_key: gpu_presentation_key(ctx.viewport_id(), idx, secondary, false),
             display: sync_display_lut(app, shown, key, output),
             output: output.unwrap_or(0),
             hdr: hdr_preview(app, doc),
@@ -475,7 +484,7 @@ fn paint_canvas(
         // A document too large for one full-resolution texture also gets the part in view at
         // the screen's resolution, drawn over the reduced whole (#7568).
         let in_view =
-            InView { visible: visible_doc_rect(&xf), zoom: view.zoom, key: egui::Id::unique(("pc-canvas-detail", ctx.viewport_id(), idx, primary)).value() };
+            InView { visible: visible_doc_rect(&xf), zoom: view.zoom, key: egui::Id::unique(("pc-canvas-detail", ctx.viewport_id(), idx, primary, secondary)).value() };
         let textures = ensure_texture_in_view(app, ctx, idx, output, Some(in_view));
         let tex = textures.as_ref().map(|t| t.texture);
         // The area the image covers: a size-changing preview's own (Image › Rotation).
@@ -603,7 +612,7 @@ struct CanvasNavigationInput<'a> {
 fn update_canvas_navigation(app: &mut PhotocraftApp, view: &mut View, input: CanvasNavigationInput<'_>) {
     // Navigation (wheel_nav.rs): scroll pans (⇧ or ⌘/Ctrl sideways); pinch and ⌥-scroll zoom around the pointer.
     // The wheel also scrolls over the scrollbars drawn on top of the canvas (last frame's hover).
-    let bars_id = egui::Id::unique(("pc-canvas-bars-hover", input.idx));
+    let bars_id = egui::Id::unique(("pc-canvas-bars-hover", input.idx, app.view_composites.rendering_window));
     let over_bars = input.ctx.data(|d| d.get_temp::<bool>(bars_id)).unwrap_or(false);
     let nav_hovered = input.response.hovered() || input.free_hover || over_bars;
     // Interface › Enable Animations off: the wheel moves the canvas without a glide (#5721).
@@ -969,7 +978,7 @@ fn handle_canvas_tool_navigation(
     // Rotate View: drag around the view centre. Compass clicks are not a rotate drag.
     let over_compass = crate::rotate_view::compass_visible(view.rotation)
         && response.interact_pointer_pos().is_some_and(|p| crate::rotate_view::compass_rect(xf.rect).contains(p));
-    if tool == Tool::RotateView && !over_compass && crate::rotate_view::drag(ctx, view, xf, buttons, response.interact_pointer_pos()) {
+    if tool == Tool::RotateView && !over_compass && crate::rotate_view::drag(app, ctx, view, xf, buttons, response.interact_pointer_pos()) {
         (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
     }
     // Animated Zoom: a Zoom press held still zooms continuously (zoom_hold.rs); while it does,
@@ -977,7 +986,7 @@ fn handle_canvas_tool_navigation(
     if tool == Tool::Zoom && !transform_owns_pointer {
         let out = zoom_out(ui.input(|i| i.modifiers.alt));
         let on_canvas = !input.under_dialog && !over_compass && response.is_pointer_button_down_on();
-        let hold = crate::zoom_hold::hold_id(idx, primary, ctx.viewport_id());
+        let hold = crate::zoom_hold::hold_id(idx, primary, ctx.viewport_id()).with(app.view_composites.rendering_window);
         if crate::zoom_hold::update(ctx, view, xf, app.session.prefs().general.animated_zoom, out, ppp, on_canvas, hold) {
             (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
         }
@@ -1738,7 +1747,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     let t0 = crate::gpu_canvas::now_ms();
     let before = view.center;
     let over_bars = app.ui.view.shows_scrollbars()
-        && crate::scrollbars::show(ui, rect, view, flip, flip_vertical, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", idx)));
+        && crate::scrollbars::show(ui, rect, view, flip, flip_vertical, aspect, app.session.prefs().tools.overscroll, egui::Id::unique(("pc-canvas", idx, app.view_composites.rendering_window)));
     ctx.data_mut(|d| d.insert_temp(bars_id, over_bars));
     if view.center != before {
         ctx.request_repaint();
@@ -1961,7 +1970,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     if primary && !under_dialog && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
         crate::spring_tools::note_canvas_press(app);
     }
-    let bars_id = egui::Id::unique(("pc-canvas-bars-hover", idx));
+    let bars_id = egui::Id::unique(("pc-canvas-bars-hover", idx, app.view_composites.rendering_window));
     update_canvas_navigation(app, &mut view, CanvasNavigationInput { ctx: &ctx, response: &response, free_hover, wheel_owner, xf, ppp, idx });
 
     let temporary = if secondary {
@@ -2050,7 +2059,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let transform_owns_pointer = primary && app.ui.transform.is_some() && temporary.is_none() && !middle;
     let hand_pan = tool == Tool::Hand && !transform_owns_pointer;
     // Preferences › Tools › Enable Flick Panning: a Hand drag let go while moving glides on.
-    let flick_id = egui::Id::unique(("pc-flick-pan", idx, primary, ctx.viewport_id()));
+    let flick_id = egui::Id::unique(("pc-flick-pan", idx, primary, ctx.viewport_id(), app.view_composites.rendering_window));
     let flick_on = app.session.prefs().tools.enable_flick_panning;
     if let Some(d) = crate::flick_pan::frame(&ctx, flick_id, hand_pan && response.dragged() && !stroke_dismissal, response.drag_delta(), flick_on) {
         let d = xf.unmap_vec(d) / (view.zoom / ppp);

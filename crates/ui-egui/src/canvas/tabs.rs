@@ -77,7 +77,8 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     };
     let main_focused = ui.ctx().input(|i| i.viewport().focused.unwrap_or(true));
-    let rect = ui.available_rect_before_wrap();
+    let area = ui.available_rect_before_wrap();
+    let rect = super::docked_view::layout(app, ui, area);
     if main_focused && ui.rect_contains_pointer(rect) && ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
         app.ui.focused_window = None;
     }
@@ -730,6 +731,9 @@ pub(super) fn open_on_double_click(app: &mut PhotocraftApp, ui: &egui::Ui, area:
 pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let wins = app.ui.windows.clone();
     for w in wins.into_iter().filter(|w| w.open) {
+        if super::docked_view::contains(app, w.id) {
+            continue;
+        }
         let Some(st) = app.session.documents().get(w.document) else { continue };
         let title = format!("{} — window {}", st.doc.name, w.id);
         let vid = egui::ViewportId::from_hash_of(("docwin", w.id));
@@ -749,54 +753,49 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 app.session.set_active(w.document);
             }
             egui::Panel::top(egui::Id::unique(("independent-flip", w.id))).resizable(false).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let mut independent = !w.follow_main_flip;
-                    if ui.checkbox(&mut independent, tl!("Independent Flip"))
-                        .on_hover_text(tl!("When off, this window follows the Main View and its flip shortcut is disabled."))
-                        .changed()
-                        && let Some(win) = app.ui.windows.iter_mut().find(|win| win.id == w.id)
-                    {
-                        win.follow_main_flip = !independent;
-                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
-                    }
-                    let mut settings = !w.follow_main_settings;
-                    if ui.checkbox(&mut settings, tl!("Independent Settings"))
-                        .on_hover_text(tl!("When off, layer presentation and adjustment settings follow Main View."))
-                        .changed()
-                    {
-                        crate::view_visibility::set_follow_main_settings(app, ui.ctx(), w.id, !settings);
-                    }
-                });
+                super::docked_view::controls(app, ui, &w, false);
             });
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
-                let rect = ui.available_rect_before_wrap();
-                app.with_document_window(w.id, |app| {
-                    app.last_canvas_rect = rect;
-                    app.ppp = ui.ctx().pixels_per_point();
-                    if focused && class == egui::ViewportClass::Immediate {
-                        crate::shortcuts::document_window_view_keys(app, ui.ctx());
-                    }
-                    let camera = app.ui.views[w.document].clone();
-                    let mut view = canvas_view(app, ui, w.document, rect, camera, false);
-                    // Zoom Resizes Windows keeps this window's camera local too.
-                    crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
-                    app.ui.views[w.document] = view;
+            if !super::docked_view::contains(app, w.id) {
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
+                    let rect = ui.available_rect_before_wrap();
+                    secondary_canvas(app, ui, &w, rect, Some((class, vid, focused)));
                 });
-            });
+            }
         });
+        let docked = super::docked_view::contains(app, w.id);
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
-            win.focused = focused;
-            if close {
+            win.focused = focused && !docked;
+            if close && !docked {
                 win.open = false;
             }
         }
     }
     let before = app.ui.windows.len();
     app.ui.windows.retain(|w| w.open);
+    super::docked_view::retain(app);
     if app.ui.windows.len() != before {
         retain_gpu_documents(app);
     }
     crate::view_visibility::retain(app);
+}
+
+pub(super) fn secondary_canvas(
+    app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &crate::state::DocWindow, rect: Rect,
+    native: Option<(egui::ViewportClass, egui::ViewportId, bool)>,
+) {
+    app.with_document_window(w.id, |app| {
+        app.last_canvas_rect = rect;
+        app.ppp = ui.ctx().pixels_per_point();
+        if matches!(native, Some((egui::ViewportClass::Immediate, _, true))) {
+            crate::shortcuts::document_window_view_keys(app, ui.ctx());
+        }
+        let camera = app.ui.views[w.document].clone();
+        let mut view = canvas_view(app, ui, w.document, rect, camera, false);
+        if let Some((class, vid, _)) = native {
+            crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, w, &mut view, rect);
+        }
+        app.ui.views[w.document] = view;
+    });
 }
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the

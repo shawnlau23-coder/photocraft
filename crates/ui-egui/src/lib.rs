@@ -343,6 +343,7 @@ pub struct PhotocraftApp {
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,
     pub(crate) view_composites: view_visibility::Composites,
+    pub(crate) docked_view: Option<canvas::docked_view::DockedGroup>,
     /// Navigator textures belong to open documents, not the lifetime of the egui context.
     navigator_textures: HashMap<DocId, canvas::NavigatorCache>,
     /// `canvas::display_doc`'s live-adjust and Duotone documents per document: (snapshot,

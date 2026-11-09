@@ -38,11 +38,19 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
     })
 }
 
-/// Run a command id from any source (menu, shortcut, palette, automation).
-pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+fn guard_secondary_menu(app: &PhotocraftApp, id: &str) -> Result<(), String> {
     if !PhotocraftApp::secondary_view_command(id) {
         app.require_main_view()?;
+        if crate::canvas::docked_view::focused(app).is_some() && !crate::linked_cursor::handles(id) && !crate::view_visibility::handles(id) {
+            return Err(tl!("Edit the document in Main View.").into());
+        }
     }
+    Ok(())
+}
+
+/// Run a command id from any source (menu, shortcut, palette, automation).
+pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    guard_secondary_menu(app, id)?;
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
     {
@@ -305,8 +313,12 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
 }
 
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
-    if !PhotocraftApp::secondary_view_command(id) {
-        app.require_main_view()?;
+    guard_secondary_menu(app, id)?;
+    if !app.secondary_canvas()
+        && matches!(id, "view.zoomIn" | "view.zoomOut")
+        && let Some(window) = crate::canvas::docked_view::focused(app)
+    {
+        return app.with_document_window(window, |app| app.run(id, params)).ok_or_else(|| "secondary view closed".to_owned())?;
     }
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;

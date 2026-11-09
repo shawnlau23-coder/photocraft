@@ -114,10 +114,8 @@ fn repaint(app: &PhotocraftApp, ctx: &Context, before: Option<Pointer>, after: O
     if before.is_none() && after.is_none() {
         return;
     }
-    if ctx.viewport_id() != ViewportId::ROOT {
-        ctx.request_repaint_of(ViewportId::ROOT);
-    }
-    for window in app.ui.windows.iter().filter(|w| w.open) {
+    ctx.request_repaint_of(ViewportId::ROOT);
+    for window in app.ui.windows.iter().filter(|w| w.open && !crate::canvas::docked_view::contains(app, w.id)) {
         if let Some(doc) = app.session.documents().get(window.document)
             && [before, after].into_iter().flatten().any(|p| p.document == doc.doc.id)
         {
@@ -135,6 +133,10 @@ fn set_pointer(app: &mut PhotocraftApp, ctx: &Context, pointer: Option<Pointer>)
         app.ui.linked_cursor_pointer = pointer;
         repaint(app, ctx, previous, pointer);
     }
+}
+
+pub(crate) fn clear(app: &mut PhotocraftApp, ctx: &Context) {
+    set_pointer(app, ctx, None);
 }
 
 /// Root-frame cleanup also covers a source canvas that no longer gets a draw callback.

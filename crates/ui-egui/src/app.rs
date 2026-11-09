@@ -40,6 +40,7 @@ impl PhotocraftApp {
             services,
             canvases: HashMap::new(),
             view_composites: Default::default(),
+            docked_view: None,
             navigator_textures: HashMap::new(),
             display_memo: HashMap::new(),
             navigator_gpu: HashMap::new(),

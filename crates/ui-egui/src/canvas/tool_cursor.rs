@@ -145,7 +145,10 @@ pub(super) fn canvas_pointer_elsewhere(app: &crate::PhotocraftApp, ctx: &egui::C
     let mut others = crate::panel_docking::native_viewports(app, ctx);
     if !ctx.embed_viewports() && app.ui.windows.iter().any(|window| window.open) {
         others.push(egui::ViewportId::ROOT);
-        others.extend(app.ui.windows.iter().filter(|window| window.open).map(|window| egui::ViewportId::from_hash_of(("docwin", window.id))));
+        others.extend(
+            app.ui.windows.iter().filter(|window| window.open && !super::docked_view::contains(app, window.id))
+                .map(|window| egui::ViewportId::from_hash_of(("docwin", window.id))),
+        );
     }
     pointer_elsewhere(ctx, &others)
 }

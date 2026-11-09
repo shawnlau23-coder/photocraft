@@ -183,17 +183,18 @@ pub fn reset(app: &mut PhotocraftApp) -> Result<Value, String> {
 
 /// Route canvas buttons for Rotate View. Returns true when the drag is owned (the canvas then
 /// ignores the tool underneath).
-pub fn drag(ctx: &egui::Context, view: &mut View, xf: &ViewXform, b: &Buttons, pointer: Option<Pos2>) -> bool {
+pub fn drag(app: &PhotocraftApp, ctx: &egui::Context, view: &mut View, xf: &ViewXform, b: &Buttons, pointer: Option<Pos2>) -> bool {
+    let drag_id = gesture_id(app, ctx);
     if b.started {
         let pivot = xf.rect.center();
         let origin = ctx.input(|i| i.pointer.press_origin()).filter(|p| xf.rect.contains(*p)).or(pointer);
         if let Some(p) = origin {
             ctx.data_mut(|d| {
-                d.insert_temp(id(), RotateDrag { pivot, start_pointer: pointer_deg(p, pivot), start_rotation: view.rotation });
+                d.insert_temp(drag_id, RotateDrag { pivot, start_pointer: pointer_deg(p, pivot), start_rotation: view.rotation });
             });
         }
     }
-    let Some(z) = ctx.data(|d| d.get_temp::<RotateDrag>(id())) else {
+    let Some(z) = ctx.data(|d| d.get_temp::<RotateDrag>(drag_id)) else {
         return b.started || b.dragged || b.stopped;
     };
     if let Some(p) = pointer.filter(|_| b.dragged || b.stopped) {
@@ -208,7 +209,7 @@ pub fn drag(ctx: &egui::Context, view: &mut View, xf: &ViewXform, b: &Buttons, p
         view.rotation = wrap_deg(angle);
     }
     if b.stopped {
-        ctx.data_mut(|d| d.remove::<RotateDrag>(id()));
+        ctx.data_mut(|d| d.remove::<RotateDrag>(drag_id));
     }
     true
 }
@@ -225,23 +226,31 @@ pub fn compass_visible(rotation: f32) -> bool {
     rotation.is_finite() && rotation.abs() > 0.05
 }
 
+fn gesture_id(app: &PhotocraftApp, ctx: &egui::Context) -> egui::Id {
+    app.view_composites.rendering_window.map_or_else(id, |window| id().with((window, ctx.viewport_id())))
+}
+
 /// Draw the compass and handle a click / Escape / double-click reset. Returns true when the
 /// pointer over the compass should not start a rotate drag.
 pub fn overlay(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, xf: &ViewXform, view: &mut View, response: &egui::Response) -> bool {
-    if app.ui.tool == crate::state::Tool::RotateView && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) && view.rotation != 0.0 {
+    let drag_id = gesture_id(app, ctx);
+    let secondary = app.view_composites.rendering_window;
+    let compass = secondary.map_or_else(compass_id, |window| compass_id().with(window));
+    let keyboard_target = ctx.viewport_id() != egui::ViewportId::ROOT || crate::canvas::docked_view::focused(app) == secondary;
+    if keyboard_target && app.ui.tool == crate::state::Tool::RotateView && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) && view.rotation != 0.0 {
         view.rotation = 0.0;
-        ctx.data_mut(|d| d.remove::<RotateDrag>(id()));
+        ctx.data_mut(|d| d.remove::<RotateDrag>(drag_id));
     }
     if app.ui.tool == crate::state::Tool::RotateView && (response.double_clicked() || response.triple_clicked()) {
         view.rotation = 0.0;
-        ctx.data_mut(|d| d.remove::<RotateDrag>(id()));
+        ctx.data_mut(|d| d.remove::<RotateDrag>(drag_id));
     }
     if !compass_visible(view.rotation) {
-        ctx.data_mut(|d| d.remove::<Rect>(compass_id()));
+        ctx.data_mut(|d| d.remove::<Rect>(compass));
         return false;
     }
     let r = compass_rect(xf.rect);
-    ctx.data_mut(|d| d.insert_temp(compass_id(), r));
+    ctx.data_mut(|d| d.insert_temp(compass, r));
     let t = Tokens::get(ctx);
     let hover = response.hover_pos().is_some_and(|p| r.contains(p));
     painter.circle_filled(r.center(), r.width() * 0.5, if hover { t.hover } else { t.chrome });
@@ -257,7 +266,7 @@ pub fn overlay(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter
     painter.text(r.center() + vec2(0.0, r.width() * 0.18), Align2::CENTER_CENTER, "N", egui::FontId::proportional(9.0), t.text_faint);
     if response.clicked() && response.interact_pointer_pos().is_some_and(|p| r.contains(p)) {
         view.rotation = 0.0;
-        ctx.data_mut(|d| d.remove::<RotateDrag>(id()));
+        ctx.data_mut(|d| d.remove::<RotateDrag>(drag_id));
         return true;
     }
     hover
