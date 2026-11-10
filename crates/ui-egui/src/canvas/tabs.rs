@@ -76,12 +76,8 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         paint_dots(ui, ui.available_rect_before_wrap(), app.session.prefs().interface.show_canvas_dots);
         return;
     };
-    let main_focused = ui.ctx().input(|i| i.viewport().focused.unwrap_or(true));
     let area = ui.available_rect_before_wrap();
     let rect = super::docked_view::layout(app, ui, area);
-    if main_focused && ui.rect_contains_pointer(rect) && ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
-        app.ui.focused_window = None;
-    }
     app.last_canvas_rect = rect;
     app.drop_canvas_rect = Some(rect);
     // Window › Arrange: tiled / n-up layouts show several documents side by side; the active one
@@ -95,17 +91,11 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let v = canvas_view(app, ui, d, cell, view, d == active_doc);
             if d != active_doc {
                 app.ui.views[d] = v;
-                if main_focused && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| cell.contains(p))) {
-                    app.session.set_active(d);
-                }
             }
             let stroke = if d == active_doc { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, Color32::from_black_alpha(160)) };
             ui.painter().rect_stroke(cell, 0, stroke, egui::StrokeKind::Inside);
         }
         return;
-    }
-    if idx != active_doc && main_focused && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
-        app.session.set_active(idx);
     }
     let view = app.ui.views[idx].clone();
     canvas_view(app, ui, idx, rect, view, app.session.active_index() == Some(idx));

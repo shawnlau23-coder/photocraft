@@ -696,7 +696,9 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             continue;
         }
-        if app.ui.focused_window.is_some() && !ctx.input(|i| i.focused) && !PhotocraftApp::secondary_view_command(&id) {
+        if app.ui.focused_window.is_some() && !ctx.input(|i| i.focused)
+            && !PhotocraftApp::secondary_view_command(&id) && !crate::menus::main_shell_command(&id)
+        {
             continue;
         }
         // The rows are disabled while a dialog is open; a click that raced the update is dropped.

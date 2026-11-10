@@ -172,12 +172,15 @@ pub const NAV_COMMANDS: [&str; 4] = ["view.zoomIn", "view.zoomOut", "view.fitOnS
 /// Immediate document viewports do not run the main frame's shortcut handler. Dispatch only
 /// zoom steps and display flip here, inside the caller's isolated camera context.
 pub(crate) fn document_window_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    secondary_keys(app, ctx, None);
+}
+
+fn secondary_keys(app: &mut PhotocraftApp, ctx: &egui::Context, docked: Option<u64>) {
     if !ctx.input(|i| i.focused)
         || !ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })))
         || egui::Popup::is_any_open(ctx)
         || crate::menu_keys::is_focused(ctx)
-        || app.camera_raw.is_some()
-        || crate::distort_ui::modal_workspace(app).is_some()
+        || crate::panel_docking::modal_open(app, ctx)
     {
         return;
     }
@@ -192,7 +195,7 @@ pub(crate) fn document_window_view_keys(app: &mut PhotocraftApp, ctx: &egui::Con
             let egui::Event::Key { key, modifiers, pressed: true, .. } = event else { return true };
             let matched = bindings.iter().find(|(_, sc)| focus.allows(sc) && key_matches(sc, *key, *modifiers));
             if let Some((id, _)) = matched
-                && PhotocraftApp::secondary_view_command(id)
+                && (PhotocraftApp::secondary_view_command(id) || (docked.is_some() && crate::menus::main_shell_command(id)))
             {
                 if !matches!(id.as_str(), "view.flipHorizontal" | "view.flipVertical") || app.flip_enabled() {
                     commands.push(id.clone());
@@ -204,9 +207,18 @@ pub(crate) fn document_window_view_keys(app: &mut PhotocraftApp, ctx: &egui::Con
         commands
     });
     for id in commands {
-        if let Err(error) = crate::menus::invoke(app, ctx, &id, json!({})) {
+        let invoke = |app: &mut PhotocraftApp| crate::menus::invoke(app, ctx, &id, json!({}));
+        let result = if let Some(window) = docked.filter(|_| PhotocraftApp::secondary_view_command(&id)) {
+            app.with_document_window(window, invoke).unwrap_or(Ok(serde_json::Value::Null))
+        } else {
+            invoke(app)
+        };
+        if let Err(error) = result {
             app.ui.status = error;
             app.ui.status_error = true;
+        }
+        if crate::panel_docking::modal_open(app, ctx) {
+            break;
         }
     }
 }
@@ -510,7 +522,7 @@ pub(crate) fn handle_forwarded(app: &mut PhotocraftApp, ctx: &egui::Context, eve
 /// keyboard focus, so the keys count as released then.
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if let Some(id) = crate::canvas::docked_view::focused(app) {
-        app.with_document_window(id, |app| document_window_view_keys(app, ctx));
+        secondary_keys(app, ctx, Some(id));
         return;
     }
     if app.ui.focused_window.is_some() && !ctx.input(|i| i.focused) {

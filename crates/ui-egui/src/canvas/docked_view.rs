@@ -40,7 +40,15 @@ fn visible(app: &PhotocraftApp) -> impl Iterator<Item = Pane> + '_ {
     })
 }
 
-pub(crate) fn hit(app: &PhotocraftApp, position: egui::Pos2) -> Option<u64> {
+pub(crate) fn pressed(app: &PhotocraftApp, ctx: &egui::Context) -> Option<u64> {
+    let doc = app.session.active()?.doc.id;
+    visible(app)
+        .find(|pane| pane.rect.is_some() && super::canvas_pressed(ctx, doc, Some(pane.id)))
+        .map(|pane| pane.id)
+}
+
+#[cfg(test)]
+fn hit(app: &PhotocraftApp, position: egui::Pos2) -> Option<u64> {
     visible(app).find(|pane| pane.rect.is_some_and(|rect| rect.contains(position))).map(|pane| pane.id)
 }
 
@@ -321,6 +329,49 @@ mod tests {
     }
 
     #[test]
+    fn docking_new_window_for_active_document_from_each_focus() {
+        const COMMAND: &str = "window.arrange.newWindowForDocument";
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        for width in [32, 96] {
+            app.run("file.new", json!({"width": width, "height": 64, "background": "white"})).unwrap();
+        }
+        app.sync_views();
+        let document = app.session.active_index().unwrap();
+        assert_eq!(document, 1);
+        let main = app.ui.views[document].clone();
+        let doc = app.session.active().unwrap().doc.clone();
+        let create = |app: &mut PhotocraftApp| {
+            crate::menus::invoke(app, &ctx, COMMAND, json!({})).unwrap()["window"].as_u64().unwrap()
+        };
+
+        assert_eq!(app.ui.focused_window, None);
+        let first = create(&mut app);
+        app.ui.windows[0].view.zoom = 2.0;
+        app.ui.windows[0].view.flip_vertical = !main.flip_vertical;
+        app.ui.focused_window = Some(first);
+        assert_eq!(focused(&app), None);
+        let second = create(&mut app);
+        assert_eq!(app.ui.focused_window, Some(first));
+
+        let window = app.ui.windows[0].clone();
+        dock(&mut app, &ctx, &window, Side::Right);
+        app.docked_view.as_mut().unwrap().panes[0].rect = Some(Rect::from_min_max(pos2(400.0, 0.0), pos2(640.0, 480.0)));
+        assert_eq!(focused(&app), Some(first));
+        let third = create(&mut app);
+        assert_eq!(focused(&app), Some(first));
+        assert_eq!(app.ui.windows.iter().map(|w| w.id).collect::<Vec<_>>(), [first, second, third]);
+        assert!(app.ui.windows.iter().all(|w| w.open && w.document == document));
+        assert_eq!(app.ui.windows[0].view, window.view);
+        assert_eq!(app.ui.windows[0].visibility, window.visibility);
+        assert_eq!(app.ui.windows[2].view.zoom, window.view.zoom);
+        assert_eq!(app.ui.windows[2].view.flip_vertical, main.flip_vertical);
+        assert_eq!(app.ui.views[document], main);
+        assert!(Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+        assert!(crate::menus::invoke(&mut app, &ctx, "select.all", json!({})).is_err());
+    }
+
+    #[test]
     fn docking_gpu_presentation_identity_is_distinct_and_survives_host_change() {
         let key = super::super::gpu_presentation_key;
         let root = ViewportId::ROOT;
@@ -352,12 +403,14 @@ mod tests_pane {
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(580.0, 440.0)).with_pixels_per_point(2.0).build_ui_state(
             |ui, app| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    app.update_view_focus(ui.ctx());
                     crate::canvas::document_area(app, ui);
                 }
             },
             app,
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.input_mut().viewports.get_mut(&ViewportId::ROOT).unwrap().focused = Some(true);
         h.run_steps(2);
         let drag = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p, delta| {
             use egui::{Event, Modifiers, PointerButton};
@@ -396,7 +449,9 @@ mod tests_pane {
             let delta = if axis == Axis::X { egui::vec2(24.0, 0.0) } else { egui::vec2(0.0, 24.0) };
             let delta = if side.first() { delta } else { -delta };
             let inner_before = h.state().docked_view.as_ref().unwrap().inner;
+            let focus = h.state().ui.focused_window;
             drag(&mut h, outer_at, delta);
+            assert_eq!(h.state().ui.focused_window, focus);
             let (main_after, a, b) = geometry(h.state());
             assert!(axis.component(main_after.size()) < axis.component(main.size()), "{side:?}");
             assert_eq!(h.state().docked_view.as_ref().unwrap().inner, inner_before);
@@ -408,6 +463,7 @@ mod tests_pane {
             };
             assert_eq!(hit(h.state(), inner_at), None);
             drag(&mut h, inner_at, if axis == Axis::X { egui::vec2(0.0, 24.0) } else { egui::vec2(24.0, 0.0) });
+            assert_eq!(h.state().ui.focused_window, focus);
             let (main_after_inner, a_after, _) = geometry(h.state());
             assert_eq!(main_after_inner, main_after);
             assert!(axis.other().component(a_after.size()) > axis.other().component(a.size()), "{side:?}");
@@ -419,5 +475,224 @@ mod tests_pane {
         assert_eq!(h.state().ui.windows[1].view, view);
         assert!(contains(h.state(), window.id));
         assert!(!contains(h.state(), other.id));
+    }
+}
+
+#[cfg(test)]
+mod tests_interaction {
+    use super::*;
+    use egui::{Event, Key, Modifiers, PointerButton, pos2, vec2};
+    use egui_kittest::{Harness, kittest::Queryable};
+    use serde_json::json;
+
+    fn harness(overlay: bool) -> (Harness<'static, PhotocraftApp>, u64) {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":96,"height":64,"background":"white"})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap();
+        let window = app.ui.windows[0].clone();
+        dock(&mut app, &ctx, &window, Side::Right);
+        app.docked_view.as_mut().unwrap().outer = 0.70;
+        let mut h = Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+            move |ui, app| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                app.sync_views();
+                app.update_view_focus(ui.ctx());
+                crate::shortcuts::handle(app, ui.ctx());
+                let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+                crate::titlebar::caption_buttons(app, ui, bar);
+                crate::canvas::document_area(app, ui);
+                if overlay {
+                    egui::Area::new(Id::unique("test-overlapping-menu")).order(egui::Order::Foreground).fixed_pos(pos2(490.0, 170.0)).show(ui.ctx(), |ui| {
+                        ui.menu_button("Overlay menu", |ui| {
+                            if ui.button("Overlay item").clicked() {
+                                app.ui.status = "overlay handled".into();
+                                ui.close();
+                            }
+                        });
+                    });
+                }
+                crate::discard_ui::show(app, ui.ctx());
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.ctx.set_os(egui::os::OperatingSystem::Windows);
+        h.input_mut().viewports.get_mut(&ViewportId::ROOT).unwrap().focused = Some(true);
+        h.run_steps(3);
+        (h, window.id)
+    }
+
+    fn click(h: &mut Harness<'_, PhotocraftApp>, p: egui::Pos2) {
+        h.event(Event::PointerMoved(p));
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(2);
+    }
+
+    #[test]
+    fn docking_modal_no_over_secondary_closes_from_either_focus() {
+        for docked in [false, true] {
+            for command in ["file.close", "file.exit"] {
+                let (mut h, id) = harness(false);
+                h.state_mut().ui.focused_window = docked.then_some(id);
+                let ctx = h.ctx.clone();
+                crate::menus::invoke(h.state_mut(), &ctx, command, json!({})).unwrap();
+                assert!(h.state().discard.is_some());
+                h.run_steps(3);
+                let p = h.get_by_label("(N)o").rect().center();
+                assert_eq!(hit(h.state(), p), Some(id));
+                h.event(Event::PointerMoved(p));
+                h.step();
+                h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                h.step();
+                assert_eq!(h.state().ui.focused_window, docked.then_some(id));
+                h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                h.run_steps(3);
+                assert!(h.state().discard.is_none());
+                assert!(h.state().session.documents().is_empty());
+                assert_eq!(h.state().allow_close, command == "file.exit");
+            }
+        }
+    }
+
+    #[test]
+    fn docking_modal_cancel_preserves_focus_and_yes_saves() {
+        let (mut h, id) = harness(false);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "file.close", json!({})).unwrap();
+        h.run_steps(3);
+        h.get_by_label("(C)ancel").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.focused_window, Some(id));
+        assert!(h.state().discard.is_none());
+        assert!(h.state().session.active().unwrap().is_dirty());
+
+        let written = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = written.clone();
+        let app = h.state_mut();
+        app.session.active_mut().unwrap().path = Some("/pics/docked.psd".into());
+        app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"saved".to_vec(), Vec::new()))));
+        app.services.write = Some(Box::new(move |_: &str, _: &[u8]| { count.set(count.get() + 1); Ok(()) }));
+        crate::menus::invoke(app, &ctx, "file.close", json!({})).unwrap();
+        h.run_steps(3);
+        h.get_by_label("(Y)es").click();
+        h.run_steps(3);
+        assert_eq!(written.get(), 1);
+        assert!(h.state().session.documents().is_empty());
+    }
+
+    #[test]
+    fn docking_popup_owns_clicks_and_canvas_clicks_route_shortcuts() {
+        let (mut h, id) = harness(true);
+        h.state_mut().ui.focused_window = None;
+        let p = h.get_by_label("Overlay menu").rect().center();
+        assert_eq!(hit(h.state(), p), Some(id));
+        h.get_by_label("Overlay menu").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.focused_window, None);
+        let p = h.get_by_label("Overlay item").rect().center();
+        assert_eq!(hit(h.state(), p), Some(id));
+        h.get_by_label("Overlay item").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.status, "overlay handled");
+        assert_eq!(h.state().ui.focused_window, None);
+
+        let secondary = h.state().docked_view.as_ref().unwrap().panes[0].rect.unwrap();
+        click(&mut h, secondary.center());
+        assert_eq!(h.state().ui.focused_window, Some(id));
+        let main = h.state().ui.views[0].zoom;
+        let child = h.state().ui.windows[0].view.zoom;
+        let mods = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+        h.key_press_modifiers(mods, Key::Equals);
+        h.run_steps(3);
+        assert!(h.state().ui.windows[0].view.zoom > child);
+        assert_eq!(h.state().ui.views[0].zoom, main);
+        let ctx = h.ctx.clone();
+        assert!(crate::menus::invoke(h.state_mut(), &ctx, "edit.fill", json!({})).is_err());
+        let p = h.state().last_canvas_rect.center();
+        click(&mut h, p);
+        assert_eq!(h.state().ui.focused_window, None);
+        let child = h.state().ui.windows[0].view.zoom;
+        h.key_press_modifiers(mods, Key::Equals);
+        h.run_steps(3);
+        assert!(h.state().ui.views[0].zoom > main);
+        assert_eq!(h.state().ui.windows[0].view.zoom, child);
+    }
+
+    #[test]
+    fn docking_titlebar_close_opens_exit_confirmation() {
+        let (mut h, id) = harness(false);
+        click(&mut h, pos2(775.0, 20.0));
+        h.run_steps(3);
+        assert_eq!(h.state().ui.focused_window, Some(id));
+        assert_eq!(crate::discard_ui::pending_command(h.state()).unwrap().0, "file.exit");
+        h.get_by_label("(N)o").click();
+        h.run_steps(3);
+        assert!(h.state().allow_close);
+    }
+
+    #[test]
+    fn docking_application_shortcuts_keep_editing_in_main() {
+        let (mut h, id) = harness(false);
+        let ctx = h.ctx.clone();
+        let mods = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+        let written = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = written.clone();
+        let app = h.state_mut();
+        app.session.active_mut().unwrap().path = Some("/pics/docked.psd".into());
+        app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"saved".to_vec(), Vec::new()))));
+        app.services.write = Some(Box::new(move |_: &str, _: &[u8]| { count.set(count.get() + 1); Ok(()) }));
+        app.with_document_window(id, |app| {
+            assert!(crate::menus::invoke(app, &ctx, "file.save", json!({})).is_err());
+            assert!(crate::menus::invoke(app, &ctx, "file.exit", json!({})).is_err());
+        });
+
+        let revision = h.state().session.active().unwrap().revision;
+        for key in [Key::A, Key::Z] {
+            h.key_press_modifiers(mods, key);
+            h.run_steps(2);
+        }
+        assert_eq!(h.state().session.active().unwrap().revision, revision);
+        assert!(h.state().session.active().unwrap().doc.selection.is_none());
+
+        h.key_press_modifiers(mods, Key::Q);
+        h.run_steps(3);
+        assert_eq!(crate::discard_ui::pending_command(h.state()).unwrap().0, "file.exit");
+        h.get_by_label("(C)ancel").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.focused_window, Some(id));
+
+        h.key_press_modifiers(mods, Key::S);
+        h.run_steps(3);
+        assert_eq!(written.get(), 1);
+        assert!(!h.state().session.active().unwrap().is_dirty());
+        crate::menus::invoke(h.state_mut(), &ctx, "file.save", json!({})).unwrap();
+        assert_eq!(written.get(), 2);
+
+        h.state_mut().ui.tool = crate::state::Tool::Brush;
+        let before = h.state().session.active().unwrap().doc.clone();
+        let p = h.state().last_canvas_rect.center();
+        click(&mut h, p);
+        assert_eq!(h.state().ui.focused_window, None);
+        assert_ne!(h.state().session.active().unwrap().doc, before);
+        h.key_press_modifiers(mods, Key::Z);
+        h.run_steps(3);
+        assert_eq!(h.state().session.active().unwrap().doc, before);
+
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.state_mut().ui.focused_window = Some(id);
+        h.key_press_modifiers(mods, Key::W);
+        h.run_steps(3);
+        assert_eq!(crate::discard_ui::pending_command(h.state()).unwrap().0, "file.close");
+        h.get_by_label("(N)o").click();
+        h.run_steps(3);
+        assert!(h.state().session.documents().is_empty());
     }
 }

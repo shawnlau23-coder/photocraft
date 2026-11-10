@@ -300,7 +300,10 @@ pub fn caption_buttons(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect) {
         Some(Caption::Maximize) => toggle_maximize(ui.ctx()),
         Some(Caption::Close) => {
             let ctx = ui.ctx().clone();
-            let _ = crate::menus::invoke(app, &ctx, "file.exit", json!({}));
+            if let Err(error) = crate::menus::invoke(app, &ctx, "file.exit", json!({})) {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
         }
         None => {}
     }

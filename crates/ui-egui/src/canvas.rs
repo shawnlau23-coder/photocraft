@@ -1852,6 +1852,16 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
     }
 }
 
+pub(crate) fn canvas_widget_id(doc: photocraft_doc::DocId, secondary: Option<u64>) -> egui::Id {
+    egui::Id::unique(("document-canvas-input", doc, secondary))
+}
+
+/// Use egui's resolved interaction, which is available before the widget is drawn this frame.
+pub(crate) fn canvas_pressed(ctx: &egui::Context, doc: photocraft_doc::DocId, secondary: Option<u64>) -> bool {
+    ctx.read_response(canvas_widget_id(doc, secondary))
+        .is_some_and(|response| response.enabled() && (response.is_pointer_button_down_on() || response.clicked()))
+}
+
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
     let secondary = app.secondary_canvas();
@@ -1928,7 +1938,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
     let xf = ViewXform { zoom: display_view.zoom / ppp, center: display_view.center, ..target_xf }.pixel_aligned_for(app, ppp);
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
-    let response = ui.allocate_rect(rect, Sense::click_and_drag());
+    ui.advance_cursor_after_rect(rect);
+    let response = ui.interact(rect, canvas_widget_id(doc.id, app.view_composites.rendering_window), Sense::click_and_drag());
     let stroke_dismissal = primary && crate::shape_stroke_ui::dismiss_from_canvas(app, &response);
     let painter = ui.painter_at(rect);
 

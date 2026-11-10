@@ -149,9 +149,12 @@ fn independent_flip_child_inverse_mapping_and_brush_axes_follow_its_own_camera()
 }
 
 fn focus_pass(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawInput) {
-    ctx.begin_pass(raw);
-    app.update_view_focus(ctx);
-    ctx.end_pass().textures_delta.clear();
+    let mut out = ctx.run_ui(raw, |ui| {
+        app.update_view_focus(ui.ctx());
+        let doc = app.session.active().unwrap().doc.id;
+        ui.interact(app.last_canvas_rect, crate::canvas::canvas_widget_id(doc, None), egui::Sense::click_and_drag());
+    });
+    out.textures_delta.clear();
 }
 
 #[test]
@@ -186,8 +189,9 @@ fn independent_flip_root_menu_focus_keeps_child_target_but_main_canvas_click_sel
     raw.events = vec![
         Event::PointerButton { pos: pos2(20.0, 10.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
         Event::PointerMoved(pos2(40.0, 100.0)),
-        Event::PointerButton { pos: pos2(40.0, 100.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
     ];
+    focus_pass(&mut app, &ctx, raw.clone());
+    raw.events = vec![Event::PointerButton { pos: pos2(40.0, 100.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }];
     focus_pass(&mut app, &ctx, raw);
     assert_eq!(app.ui.focused_window, None);
     assert!(flip(&mut app, &ctx));

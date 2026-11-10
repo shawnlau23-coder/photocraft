@@ -38,10 +38,19 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
     })
 }
 
+/// File lifecycle and new document window commands belong to the Main shell even when a docked canvas is selected.
+pub(crate) fn main_shell_command(id: &str) -> bool {
+    matches!(id, "file.save" | "file.saveAs" | "file.saveACopy" | "file.close" | "file.closeAll" | "file.closeOthers" | "file.exit" | "window.arrange.newWindowForDocument" | "window.newWindowForDocument")
+}
+
 fn guard_secondary_menu(app: &PhotocraftApp, id: &str) -> Result<(), String> {
     if !PhotocraftApp::secondary_view_command(id) {
         app.require_main_view()?;
-        if crate::canvas::docked_view::focused(app).is_some() && !crate::linked_cursor::handles(id) && !crate::view_visibility::handles(id) {
+        if crate::canvas::docked_view::focused(app).is_some()
+            && !main_shell_command(id)
+            && !crate::linked_cursor::handles(id)
+            && !crate::view_visibility::handles(id)
+        {
             return Err(tl!("Edit the document in Main View.").into());
         }
     }
@@ -314,6 +323,19 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
 
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     guard_secondary_menu(app, id)?;
+    invoke_command(app, ctx, id, params)
+}
+
+/// Resume a save or discard action already confirmed by the unsaved-changes modal.
+pub(crate) fn resume_discard(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    app.require_main_view()?;
+    if !matches!(id, "file.save" | "file.close" | "file.closeAll" | "file.closeOthers" | "file.revert") {
+        return Err("unsupported discard continuation".into());
+    }
+    invoke_command(app, ctx, id, params)
+}
+
+fn invoke_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if !app.secondary_canvas()
         && matches!(id, "view.zoomIn" | "view.zoomOut")
         && let Some(window) = crate::canvas::docked_view::focused(app)

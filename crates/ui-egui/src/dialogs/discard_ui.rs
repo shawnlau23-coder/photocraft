@@ -155,7 +155,7 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // looks like it is being asked about again (#2547). Cancel then keeps only the unanswered ones.
     if one_by_one {
         if let Some(i) = answered.and_then(|d| index_of(app, d))
-            && let Err(e) = crate::menus::invoke_unguarded(app, ctx, "file.close", json!({"document": i}))
+            && let Err(e) = crate::menus::resume_discard(app, ctx, "file.close", json!({"document": i}))
         {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -199,7 +199,7 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
             None => return,
         };
     }
-    if let Err(e) = crate::menus::invoke_unguarded(app, ctx, &id, params) {
+    if let Err(e) = crate::menus::resume_discard(app, ctx, &id, params) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
@@ -210,7 +210,7 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
 fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
     let Some(i) = index_of(app, doc) else { return false };
     app.session.set_active(i);
-    let saved = crate::menus::invoke_unguarded(app, ctx, "file.save", json!({}));
+    let saved = crate::menus::resume_discard(app, ctx, "file.save", json!({}));
     if saved.is_ok() && app.file_dialog_open() {
         let ctx = ctx.clone();
         app.after_file_dialog(move |app, saved| {

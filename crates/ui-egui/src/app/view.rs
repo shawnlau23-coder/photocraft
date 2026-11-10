@@ -110,22 +110,18 @@ impl PhotocraftApp {
             self.ui.focused_window = None;
         }
         let root_focused = ctx.input(|i| i.viewport().focused == Some(true));
-        if root_focused
-            && !egui::Popup::is_any_open(ctx)
-            && self.ui.dialogs.is_empty()
-            && ctx.input(|i| i.pointer.any_pressed())
-            && let Some(position) = ctx.input(|i| i.pointer.interact_pos())
-            && let Some(id) = crate::canvas::docked_view::hit(self, position)
-        {
-            self.ui.focused_window = Some(id);
+        if crate::panel_docking::modal_open(self, ctx) || egui::Popup::is_any_open(ctx) {
             return;
         }
-        let root_focus_event = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(true))));
-        let pressing_menu = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !self.last_canvas_rect.contains(p)));
-        let canvas_press = !egui::Popup::is_any_open(ctx)
-            && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| self.last_canvas_rect.contains(p)));
-        if root_focused && (canvas_press || (root_focus_event && !pressing_menu)) {
-            self.ui.focused_window = None;
+        if root_focused && ctx.input(|i| i.pointer.any_pressed()) {
+            if let Some(id) = crate::canvas::docked_view::pressed(self, ctx) {
+                self.ui.focused_window = Some(id);
+            } else if let Some((index, _)) = self.session.documents().iter().enumerate().find(|(index, st)| {
+                !crate::view_cmds::document_is_floating(self, *index) && crate::canvas::canvas_pressed(ctx, st.doc.id, None)
+            }) {
+                self.ui.focused_window = None;
+                self.session.set_active(index);
+            }
         }
         if !root_focused {
             let window = self

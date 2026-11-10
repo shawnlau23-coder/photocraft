@@ -137,16 +137,21 @@ fn panel_routes_only_visibility_and_preserves_cameras_and_focus_target() {
     // Clicking root panel chrome retains the child's logical target; clicking canvas selects main.
     let rect = egui::Rect::from_min_max(egui::pos2(100.0, 100.0), egui::pos2(600.0, 500.0));
     app.last_canvas_rect = rect;
-    for (pos, expected) in [(egui::pos2(700.0, 200.0), Some(w)), (rect.center(), None)] {
-        let mut input = egui::RawInput::default();
+    let doc = app.session.active().unwrap().doc.id;
+    let pass = |app: &mut PhotocraftApp, events| {
+        let mut input = egui::RawInput { events, ..Default::default() };
         input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().focused = Some(true);
-        input.events = vec![
-            egui::Event::WindowFocused(true),
-            egui::Event::PointerMoved(pos),
-            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
-        ];
-        let mut output = ctx.run_ui(input, |ui| app.update_view_focus(ui.ctx()));
+        let mut output = ctx.run_ui(input, |ui| {
+            app.update_view_focus(ui.ctx());
+            ui.interact(rect, crate::canvas::canvas_widget_id(doc, None), egui::Sense::click_and_drag());
+        });
         output.textures_delta.clear();
+    };
+    for (pos, expected) in [(egui::pos2(700.0, 200.0), Some(w)), (rect.center(), None)] {
+        pass(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            pass(&mut app, vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }]);
+        }
         assert_eq!(app.ui.focused_window, expected);
     }
 }

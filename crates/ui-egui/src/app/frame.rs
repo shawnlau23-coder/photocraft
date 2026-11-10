@@ -43,6 +43,7 @@ impl PhotocraftApp {
         }
         self.last_frame_time = now;
         self.sync_views();
+        discard_ui::guard_window_close(self, ctx);
         self.update_view_focus(ctx);
         crate::view_visibility::adjustments::follow(self, ctx);
         crate::linked_cursor::prune(self, ctx);
@@ -76,7 +77,6 @@ impl PhotocraftApp {
         // A window bigger than its display (1440 × 900 on 1366 × 768) runs under the taskbar:
         // maximize it into the work area once (#315).
         work_area::fit_window(ctx);
-        discard_ui::guard_window_close(self, ctx);
         // A zoom field being typed in: plays its alert, and notes a click on the pasteboard.
         crate::zoom_field::tick(self, ctx);
         // A colour swatch's Color Picker OK hands its colour back to the swatch widget.
