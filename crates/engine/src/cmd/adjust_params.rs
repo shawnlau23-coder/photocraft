@@ -6,11 +6,19 @@ use super::{Adjustment, ColorMode, EngineError, Layer, LayerContent, Map, Result
 pub(super) fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &str) -> Result<Value> {
     let label = format!("New {} Layer", adj.label());
     let name = adj.label().to_string();
+    let preserve_target = p.get("preserveTarget").and_then(Value::as_bool).unwrap_or(false);
     let id = s.edit(&label, |doc, active| {
         let mut l = Layer::new(doc.next_layer_name(&name), LayerContent::Adjustment(adj));
+        let selection = preserve_target.then(|| doc.selection.clone());
         mask_new_layer(doc, &mut l, p, cmd, true)?;
+        if let Some(selection) = selection {
+            doc.selection = selection;
+        }
+        l.visible = p.get("visible").and_then(Value::as_bool).unwrap_or(true);
         let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
-        *active = Some(id);
+        if !preserve_target {
+            *active = Some(id);
+        }
         Ok(id)
     })?;
     Ok(json!({ "layer": id.0 }))

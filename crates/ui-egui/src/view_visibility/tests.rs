@@ -37,6 +37,78 @@ fn pixel(doc: &Document) -> [f32; 4] {
 }
 
 #[test]
+fn adjustment_creation_from_canvas_focus_preserves_main_and_restores_secondary_visibility() {
+    let (mut app, ctx, red, blue) = fixture();
+    let command = "layer.newAdjustmentLayer.posterize";
+    let a = window(&mut app, &ctx);
+    let b = window(&mut app, &ctx);
+    let c = window(&mut app, &ctx);
+    set_follow_main_settings(&mut app, &ctx, c, true);
+    select_panel_window(&mut app, Some(b));
+    app.ui.focused_window = Some(a);
+    app.run("layer.select", json!({"layer":red.0,"mode":"add"})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    assert!(app.ui.mask_target);
+    let working = app.session.active().unwrap().clone();
+    let masks = (app.ui.mask_target, app.ui.vector_mask_target);
+    let result = menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+    let layer = LayerId(result["layer"].as_u64().unwrap());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.active_layer, working.active_layer);
+    assert_eq!(st.selected_layers(), working.selected_layers());
+    assert!(st.doc.selection == working.doc.selection, "creation keeps Main selection");
+    assert_eq!((app.ui.mask_target, app.ui.vector_mask_target), masks);
+    assert_eq!(st.history.past_len(), working.history.past_len() + 1);
+    assert!(!st.doc.layer(layer).unwrap().visible);
+    assert_eq!(panel_window(&app), Some(b));
+    assert_eq!(created_properties(&app), Some((a, layer)));
+    let target = adjustments::Target::current(&mut app, layer).unwrap();
+    assert_eq!(target.window, Some(a));
+    adjustments::select(&mut app, Some(target));
+    assert!(adjustments::accepts_completion(&app, target, app.view_composites.editor.ui_epoch));
+    adjustments::commit(&mut app, target, &json!({"levels": 5}), false).unwrap();
+    let canonical = &app.session.active().unwrap().doc.layer(layer).unwrap().content;
+    assert_ne!(canonical, &photocraft_doc::LayerContent::Adjustment((*adjustments::committed(&app, target).unwrap()).clone()));
+    assert!(shown(&mut app, a).layer(layer).unwrap().visible);
+    assert!(!shown(&mut app, b).layer(layer).unwrap().visible);
+    assert!(!shown(&mut app, c).layer(layer).unwrap().visible);
+
+    let opts = photocraft_io::ExportOptions::default();
+    let png = |doc: &Document| photocraft_io::export(doc, "png", &opts).unwrap().bytes;
+    assert_eq!(png(&working.doc), png(&app.session.active().unwrap().doc));
+    let native = photocraft_io::export(&app.session.active().unwrap().doc, "pcraft", &opts).unwrap().bytes;
+    let saved = photocraft_io::import("sample.pcraft", &native).unwrap().document;
+    assert!(!saved.layer(layer).unwrap().visible);
+
+    app.ui.focused_window = None;
+    menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
+    assert!(app.session.active().unwrap().doc.layer(layer).is_none());
+    assert!(created_properties(&app).is_none());
+    menus::invoke(&mut app, &ctx, "edit.redo", json!({})).unwrap();
+    assert!(shown(&mut app, a).layer(layer).unwrap().visible);
+    assert!(!shown(&mut app, b).layer(layer).unwrap().visible);
+    assert!(!app.session.active().unwrap().doc.layer(layer).unwrap().visible);
+
+    app.ui.windows.iter_mut().find(|w| w.id == a).unwrap().open = false;
+    retain(&mut app);
+    assert!(!app.view_composites.created_adjustments.contains_key(&(working.doc.id, layer)));
+
+    app.ui.focused_window = Some(c);
+    let shared = LayerId(menus::invoke(&mut app, &ctx, command, json!({})).unwrap()["layer"].as_u64().unwrap());
+    assert!(app.session.active().unwrap().doc.layer(shared).unwrap().visible);
+    assert!(shown(&mut app, b).layer(shared).unwrap().visible);
+    assert!(settings_read_only(&app, Some(c)));
+    assert_eq!(app.session.active().unwrap().active_layer, working.active_layer);
+
+    app.ui.focused_window = None;
+    let main = LayerId(menus::invoke(&mut app, &ctx, command, json!({})).unwrap()["layer"].as_u64().unwrap());
+    assert_eq!(app.session.active().unwrap().active_layer, Some(main));
+    assert!(app.session.active().unwrap().doc.layer(main).unwrap().visible);
+    assert!(app.session.active().unwrap().doc.layer(blue).is_some());
+}
+
+#[test]
 fn views_capture_canonical_visibility_and_diverge_without_document_or_history_edits() {
     let (mut app, ctx, red, blue) = fixture();
     let a = window(&mut app, &ctx);

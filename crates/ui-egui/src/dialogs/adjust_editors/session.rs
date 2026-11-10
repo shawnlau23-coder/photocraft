@@ -82,7 +82,7 @@ pub fn properties_reset(ctx: &egui::Context, doc: u64, id: LayerId, adj: &Adjust
 /// The Properties-panel editor of an adjustment layer: previews live (`app.live_adjust`) while a
 /// control moves and commits one `layer.setAdjustment` per gesture.
 pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
-    if crate::view_visibility::settings_read_only(app, crate::view_visibility::focused_window(app)) {
+    if crate::view_visibility::settings_read_only(app, crate::view_visibility::properties_window(app, id)) {
         ui.label(tl!("Adjustment parameters follow Main View."));
         return;
     }
@@ -105,7 +105,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
 }
 
 fn canonical_layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
-    if crate::view_visibility::focused_window(app).is_some() {
+    if crate::view_visibility::properties_window(app, id).is_some() {
         ui.label("This imported adjustment has no supported parameter editor.");
         return;
     }

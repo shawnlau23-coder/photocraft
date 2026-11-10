@@ -85,6 +85,9 @@ pub(crate) struct Composites {
     pub editor: adjustments::EditorSession,
     pub rendering_window: Option<u64>,
     pub sampling_source: Option<(u64, photocraft_doc::DocId)>,
+    panel_target: Option<(DocId, Option<u64>)>,
+    created_adjustments: HashMap<(DocId, LayerId), u64>,
+    created_properties: Option<(DocId, u64, LayerId, Option<LayerId>)>,
     pub caches: HashMap<u64, Caches>,
     pub channels: HashMap<u64, HashMap<u64, crate::channel_view::Cache>>,
     pub gpu_frames: HashMap<crate::gpu_canvas::CompositeOutput, crate::canvas::SecondaryGpuFrame>,
@@ -102,6 +105,67 @@ pub(crate) fn secondary_outputs(app: &PhotocraftApp) -> impl Iterator<Item = cra
 pub(crate) fn focused_window(app: &PhotocraftApp) -> Option<u64> {
     let doc = app.session.active_index()?;
     app.ui.focused_window.filter(|id| app.ui.windows.iter().any(|w| w.id == *id && w.open && w.document == doc))
+}
+
+pub(crate) fn panel_window(app: &PhotocraftApp) -> Option<u64> {
+    let index = app.session.active_index()?;
+    let doc = app.session.active()?.doc.id;
+    match app.view_composites.panel_target {
+        Some((owner, window)) if owner == doc => window.filter(|id| app.ui.windows.iter().any(|w| w.id == *id && w.open && w.document == index)),
+        _ => focused_window(app),
+    }
+}
+
+pub(crate) fn select_panel_window(app: &mut PhotocraftApp, window: Option<u64>) {
+    app.view_composites.panel_target = app.session.active().map(|st| (st.doc.id, window));
+    clear_created_properties(app);
+}
+
+pub(crate) fn clear_created_properties(app: &mut PhotocraftApp) {
+    if app.view_composites.created_properties.take().is_some() {
+        adjustments::select(app, None);
+    }
+}
+
+pub(crate) fn created_properties(app: &PhotocraftApp) -> Option<(u64, LayerId)> {
+    let (doc, window, layer, active) = app.view_composites.created_properties?;
+    let st = app.session.active()?;
+    (st.doc.id == doc && st.active_layer == active && st.doc.layer(layer).is_some()
+        && !settings_read_only(app, Some(window))
+        && app.ui.windows.iter().any(|w| w.open && w.id == window && Some(w.document) == app.session.active_index()))
+        .then_some((window, layer))
+}
+
+pub(crate) fn properties_window(app: &PhotocraftApp, layer: LayerId) -> Option<u64> {
+    if let Some((window, target)) = created_properties(app) && target == layer {
+        return Some(window);
+    }
+    panel_window(app)
+}
+
+pub(crate) fn create_adjustment(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, id: &str, params: Value) -> Result<Value, String> {
+    let st = app.session.active().ok_or("no document")?;
+    let (doc, active) = (st.doc.id, st.active_layer);
+    let exclusive = !settings_read_only(app, Some(window));
+    let mut params = match params {
+        Value::Object(params) => params,
+        Value::Null => serde_json::Map::new(),
+        _ => return Err("adjustment parameters must be an object".into()),
+    };
+    params.insert("preserveTarget".into(), json!(true));
+    params.insert("visible".into(), json!(!exclusive));
+    let result = app.run(id, Value::Object(params))?;
+    clear_created_properties(app);
+    if exclusive && let Some(layer) = result.get("layer").and_then(Value::as_u64).map(LayerId)
+        && let Some(w) = app.ui.windows.iter_mut().find(|w| w.id == window && w.open && w.visibility.document == Some(doc))
+    {
+        w.visibility.layers.insert(layer, true);
+        app.view_composites.created_adjustments.insert((doc, layer), window);
+        app.view_composites.created_properties = Some((doc, window, layer, active));
+        ctx.request_repaint_of(egui::ViewportId::from_hash_of(("docwin", window)));
+    }
+    ctx.request_repaint_of(egui::ViewportId::ROOT);
+    Ok(result)
 }
 
 pub(crate) fn settings_read_only(app: &PhotocraftApp, window: Option<u64>) -> bool {
@@ -128,7 +192,7 @@ pub(crate) fn set_follow_main_settings(app: &mut PhotocraftApp, ctx: &egui::Cont
 }
 
 pub(crate) fn focused_opacity(app: &PhotocraftApp, layer: LayerId) -> Option<f32> {
-    let id = focused_window(app)?;
+    let id = panel_window(app)?;
     if settings_read_only(app, Some(id)) {
         return None;
     }
@@ -138,7 +202,14 @@ pub(crate) fn focused_opacity(app: &PhotocraftApp, layer: LayerId) -> Option<f32
 pub(crate) fn initialize(app: &mut PhotocraftApp, id: u64) {
     let Some(w) = app.ui.windows.iter_mut().find(|w| w.id == id && w.open) else { return };
     if let Some(st) = app.session.documents().get(w.document) {
+        // A layer returning from history has no live visibility entry. Reapply only its
+        // originating view's initial override, leaving any live user edits intact.
+        let restored: Vec<_> = app.view_composites.created_adjustments.iter()
+            .filter_map(|(&(doc, layer), &window)| (id == window && st.doc.id == doc
+                && !w.visibility.layers.contains_key(&layer) && st.doc.layer(layer).is_some()).then_some(layer))
+            .collect();
         w.visibility.sync(&st.doc);
+        w.visibility.layers.extend(restored.into_iter().map(|layer| (layer, true)));
     }
 }
 
@@ -146,6 +217,11 @@ pub(crate) fn initialize(app: &mut PhotocraftApp, id: u64) {
 pub(crate) fn retain(app: &mut PhotocraftApp) {
     let live: Vec<u64> = app.ui.windows.iter().filter(|w| w.open && w.document < app.session.documents().len()).map(|w| w.id).collect();
     validate_sampling_source(app);
+    app.view_composites.created_adjustments.retain(|(doc, _), id| app.ui.windows.iter().any(|w| w.id == *id && w.open
+        && app.session.documents().get(w.document).is_some_and(|st| st.doc.id == *doc)));
+    if created_properties(app).is_none() {
+        clear_created_properties(app);
+    }
     let outputs: Vec<_> = secondary_outputs(app).collect();
     app.view_composites.gpu_frames.retain(|output, _| outputs.contains(output));
     app.view_composites.caches.retain(|id, _| live.contains(id));

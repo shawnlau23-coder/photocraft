@@ -50,7 +50,7 @@ pub(crate) fn supported(value: &Adjustment) -> bool {
 
 impl Target {
     pub(crate) fn current(app: &mut PhotocraftApp, layer: LayerId) -> Option<Self> {
-        Self::new(app, focused_window(app), layer).ok()
+        Self::new(app, super::properties_window(app, layer), layer).ok()
     }
 
     fn new(app: &mut PhotocraftApp, window: Option<u64>, layer: LayerId) -> Result<Self, String> {
@@ -158,10 +158,8 @@ pub(crate) fn accepts_completion(app: &PhotocraftApp, target: Target, epoch: u64
     app.view_composites.editor.target == Some(target)
         && app.view_composites.editor.ui_epoch == epoch
         && target.validate(app).is_ok()
-        && focused_window(app) == target.window
-        && app.session.active().is_some_and(|st| st.doc.id == target.document && st.active_layer == Some(target.layer))
-        && !app.ui.vector_mask_target
-        && (!app.ui.mask_target || app.ui.properties_layer == Some(target.layer.0))
+        && super::properties_window(app, target.layer) == target.window
+        && properties_target_matches(app, target)
 }
 
 pub(crate) fn prune(app: &mut PhotocraftApp) {
@@ -170,12 +168,22 @@ pub(crate) fn prune(app: &mut PhotocraftApp) {
     }
 }
 
+fn properties_target_matches(app: &PhotocraftApp, target: Target) -> bool {
+    if app.session.active().is_none_or(|st| st.doc.id != target.document) {
+        return false;
+    }
+    if super::created_properties(app).is_some_and(|(window, layer)| target.window == Some(window) && target.layer == layer) {
+        return true;
+    }
+    app.session.active().is_some_and(|st| st.active_layer == Some(target.layer))
+        && !app.ui.vector_mask_target
+        && (!app.ui.mask_target || app.ui.properties_layer == Some(target.layer.0))
+}
+
 /// Cancel on view/layer/mask target changes, including when Properties is not currently drawn.
 pub(crate) fn follow(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(old) = app.view_composites.editor.target else { return };
-    let selected = app.session.active().and_then(|s| s.active_layer);
-    let mask = app.ui.vector_mask_target || (app.ui.mask_target && app.ui.properties_layer != Some(old.layer.0));
-    if old.validate(app).is_err() || selected != Some(old.layer) || focused_window(app) != old.window || mask {
+    if old.validate(app).is_err() || super::properties_window(app, old.layer) != old.window || !properties_target_matches(app, old) {
         select(app, None);
         ctx.request_repaint();
     } else if app.view_composites.editor.draft.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {

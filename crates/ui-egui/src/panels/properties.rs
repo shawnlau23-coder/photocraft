@@ -87,13 +87,14 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
     use crate::view_visibility::adjustments;
     let target = adjustments::Target::current(app, id)
         .filter(|t| t.window.is_some() || matches!(adj, photocraft_doc::Adjustment::Posterize { .. } | photocraft_doc::Adjustment::Levels { .. }));
-    let window = crate::view_visibility::focused_window(app);
+    let window = crate::view_visibility::properties_window(app, id);
     if window.is_some() {
         ui.small("Clipping and mask pixel edits still affect the shared document.");
     }
     // Keep the scope reachable before tall editors and within a compact dock (#5231).
     // Adjustment layers affect the stack by default; clipping limits them to their base.
-    if let Some(mut clip) = app.session.active().and_then(|s| s.doc.layer(id).map(|l| l.clipped))
+    if crate::view_visibility::created_properties(app).is_none()
+        && let Some(mut clip) = app.session.active().and_then(|s| s.doc.layer(id).map(|l| l.clipped))
         && widgets::toggle(ui, &mut clip, tl!("Clip to layer below")).changed()
     {
         let _ = app.run("layer.setProps", json!({"layer": id.0, "clipped": clip}));
@@ -154,7 +155,7 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         });
         ui.add_space(6.0);
     }
-    let opacity_window = crate::view_visibility::focused_window(app);
+    let opacity_window = crate::view_visibility::panel_window(app);
     let mut o = crate::view_visibility::focused_opacity(app, layer.id).unwrap_or(layer.opacity) * 100.0;
     if let Some(id) = opacity_window {
         ui.small(format!("Opacity: Window {id} (display only)"));
@@ -187,6 +188,16 @@ fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     };
     let doc = st.doc.clone();
+    if let Some((window, id)) = crate::view_visibility::created_properties(app)
+        && let Some(layer) = doc.layer(id)
+        && let LayerContent::Adjustment(adj) = &layer.content
+    {
+        ui.push_id(("created-adjustment", window, id), |ui| {
+            crate::props_layout::header(ui, layer);
+            adjustment_controls(app, ui, id, adj);
+        });
+        return;
+    }
     if let Some(layer) = st.active_layer.and_then(|id| doc.layer(id))
         && crate::mask_props_ui::targeted(app, layer)
     {
@@ -278,7 +289,7 @@ pub(super) fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     if let Some(id) = run {
-        let _ = app.run(&id, json!({}));
+        let _ = crate::menus::invoke(app, ui.ctx(), &id, json!({}));
         app.ui.dock_tabs.properties = 0;
     }
 }

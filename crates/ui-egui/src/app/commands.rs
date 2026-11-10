@@ -129,6 +129,7 @@ impl PhotocraftApp {
             id,
             "layer.vectorMask.add" | "layer.vectorMask.fromPath" | "layer.vectorMask.revealAll" | "layer.vectorMask.hideAll" | "layer.vectorMask.currentPath"
         ) && on_active_layer;
+        let preserve_target = crate::menus::adjustment_creation_command(id) && params.get("preserveTarget").and_then(Value::as_bool) == Some(true);
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
@@ -137,7 +138,7 @@ impl PhotocraftApp {
             jobs_ui::run(self, id, params)
         };
         let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
-        self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, path_mask);
+        self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, preserve_target, path_mask);
         self.perf.last_command = id.to_string();
         self.perf.command_ms = gpu_canvas::now_ms() - t0;
         if self.run_depth == 1 {
@@ -148,6 +149,9 @@ impl PhotocraftApp {
                 if self.ui.status_error {
                     self.ui.status.clear();
                     self.ui.status_error = false;
+                }
+                if id == "layer.select" || (creates_adjustment_or_fill && !preserve_target) {
+                    crate::view_visibility::clear_created_properties(self);
                 }
                 self.sync_views();
                 let removed = self.session.take_samplers_removed();
@@ -184,6 +188,7 @@ impl PhotocraftApp {
         creates_active_mask: bool,
         creates_active_vector_mask: bool,
         creates_adjustment_or_fill: bool,
+        preserve_target: bool,
         path_mask: bool,
     ) {
         if result.is_ok() && ADDS_LAYER_MASK.contains(&id) {
@@ -191,7 +196,7 @@ impl PhotocraftApp {
             self.ui.mask_target = true;
             self.ui.vector_mask_target = false;
             self.ui.properties_layer = None;
-        } else if result.is_ok() && creates_adjustment_or_fill {
+        } else if result.is_ok() && creates_adjustment_or_fill && !preserve_target {
             // Panel Options may suppress a fill layer's default mask. Never target a
             // nonexistent mask; an active path creates a vector mask instead.
             let masks = self

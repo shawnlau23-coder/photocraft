@@ -720,6 +720,30 @@ mod tests_interaction {
     }
 
     #[test]
+    fn docking_adjustment_shortcut_runs_only_through_the_main_shell() {
+        let (mut h, id) = harness(false);
+        let ctx = h.ctx.clone();
+        let app = h.state_mut();
+        let command = "layer.newAdjustmentLayer.posterize";
+        app.session.edit_prefs(|p| {
+            p.shortcuts.insert(command.into(), "Cmd+K".into());
+        });
+        let before = app.session.active().unwrap().clone();
+        app.with_document_window(id, |app| {
+            assert!(crate::menus::invoke(app, &ctx, command, json!({})).is_err());
+        });
+        let mods = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+        h.key_press_modifiers(mods, Key::K);
+        h.run_steps(2);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.history.past_len(), before.history.past_len() + 1);
+        assert_eq!(st.active_layer, before.active_layer);
+        let (window, layer) = crate::view_visibility::created_properties(h.state()).unwrap();
+        assert_eq!(window, id);
+        assert!(!st.doc.layer(layer).unwrap().visible);
+    }
+
+    #[test]
     fn docking_application_shortcuts_keep_editing_in_main() {
         let (mut h, id) = harness(false);
         let ctx = h.ctx.clone();

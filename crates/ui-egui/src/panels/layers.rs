@@ -119,21 +119,21 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // also makes the operation accessible without relying on native focus event ordering.
     let windows: Vec<u64> = app.ui.windows.iter().filter(|w| w.open && Some(w.document) == app.session.active_index()).map(|w| w.id).collect();
     if !windows.is_empty() {
-        let target = crate::view_visibility::focused_window(app).map_or_else(|| "View: Main View".into(), |id| format!("View: Window {id}"));
+        let target = crate::view_visibility::panel_window(app).map_or_else(|| "View: Main View".into(), |id| format!("View: Window {id}"));
         ui.menu_button(target, |ui| {
             if ui.button("Main View (document visibility)").clicked() {
-                app.ui.focused_window = None;
+                crate::view_visibility::select_panel_window(app, None);
                 ui.close();
             }
             for id in windows {
                 if ui.button(format!("Window {id} (display only)")).clicked() {
-                    app.ui.focused_window = Some(id);
+                    crate::view_visibility::select_panel_window(app, Some(id));
                     ui.close();
                 }
             }
         });
     }
-    let visibility_window = crate::view_visibility::focused_window(app);
+    let visibility_window = crate::view_visibility::panel_window(app);
     let doc = visibility_window.map_or_else(|| canonical.clone(), |id| crate::view_visibility::project(app, id, canonical.clone()).0);
     if let Some(id) = visibility_window {
         if crate::view_visibility::settings_read_only(app, Some(id)) {
@@ -591,7 +591,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.dock.collapsed.retain(|g| *g != crate::dock::Group::Properties);
             continue;
         }
-        if p.is_null() || id == "layer.newFillLayer.solidColor" || id == photocraft_engine::pattern_fill_cmds::CREATE {
+        if p.is_null() || crate::menus::adjustment_creation_command(&id) || id == "layer.newFillLayer.solidColor" || id == photocraft_engine::pattern_fill_cmds::CREATE {
             // Context-menu items and the Layers footer's Solid Color… and Pattern… actions behave
             // like their menu-bar twins: a new Solid Color fill opens its picker, a new Pattern
             // fill the Pattern Fill dialog.

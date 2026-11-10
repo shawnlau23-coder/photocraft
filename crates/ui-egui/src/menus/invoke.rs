@@ -38,9 +38,14 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
     })
 }
 
-/// File lifecycle and new document window commands belong to the Main shell even when a docked canvas is selected.
+/// Main-shell commands available even when a docked canvas is selected.
 pub(crate) fn main_shell_command(id: &str) -> bool {
-    matches!(id, "file.save" | "file.saveAs" | "file.saveACopy" | "file.close" | "file.closeAll" | "file.closeOthers" | "file.exit" | "window.arrange.newWindowForDocument" | "window.newWindowForDocument")
+    adjustment_creation_command(id)
+        || matches!(id, "file.save" | "file.saveAs" | "file.saveACopy" | "file.close" | "file.closeAll" | "file.closeOthers" | "file.exit" | "window.arrange.newWindowForDocument" | "window.newWindowForDocument")
+}
+
+pub(crate) fn adjustment_creation_command(id: &str) -> bool {
+    id.starts_with("layer.newAdjustmentLayer.") && photocraft_engine::commands::find(id).is_some()
 }
 
 fn guard_secondary_menu(app: &PhotocraftApp, id: &str) -> Result<(), String> {
@@ -341,6 +346,11 @@ fn invoke_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params
         && let Some(window) = crate::canvas::docked_view::focused(app)
     {
         return app.with_document_window(window, |app| app.run(id, params)).ok_or_else(|| "secondary view closed".to_owned())?;
+    }
+    if adjustment_creation_command(id)
+        && let Some(window) = crate::view_visibility::focused_window(app)
+    {
+        return crate::view_visibility::create_adjustment(app, ctx, window, id, params);
     }
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
