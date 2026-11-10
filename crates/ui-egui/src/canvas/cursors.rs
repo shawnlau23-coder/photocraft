@@ -58,7 +58,10 @@ fn display_color(c: [f32; 3]) -> Color32 {
 /// (what a click would pick) and the current foreground, or `None` where there is no colour
 /// to sample (#213).
 pub(crate) fn eyedropper_ring_colors(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<(Color32, Color32)> {
-    let new = eyedropper_color(app, x, y)?;
+    let mut new = foreground_sample_color(app, x, y)?;
+    if app.alt_sampling && super::paint_target(app) != json!("pixels") {
+        new = [photocraft_color::convert::rgb_to_gray(new); 3];
+    }
     let fg = app.session.tools.foreground;
     Some((display_color(new), display_color([fg[0], fg[1], fg[2]])))
 }
@@ -173,7 +176,8 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
 }
 
 pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
-    if let Some(mut rgb) = eyedropper_color(app, x, y) {
+    let color = if app.alt_sampling { foreground_sample_color(app, x, y) } else { eyedropper_color(app, x, y) };
+    if let Some(mut rgb) = color {
         if super::paint_target(app) != json!("pixels") {
             rgb = [photocraft_color::convert::rgb_to_gray(rgb); 3];
         }
@@ -184,13 +188,30 @@ pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: e
 
 /// Sample the same projected document as the secondary canvas, without GPU readback.
 pub(super) fn sample_secondary_composite(app: &mut PhotocraftApp, idx: usize, x: f64, y: f64) {
-    use photocraft_engine::sample_cmds::{SampleLayers, sample_color};
-    let (source, key) = super::display_doc(app, idx);
-    let (shown, _) = crate::view_visibility::render_document(app, idx, source, key);
-    let [r, g, b, a] = sample_color(&shown, None, x, y, app.ui.tool_options.eyedropper_size, SampleLayers::All);
-    if a > 0.0 {
+    if let Some(window) = app.view_composites.rendering_window
+        && let Some([r, g, b]) = window_composite_color(app, window, idx, x, y)
+    {
         let _ = app.run("tools.setColors", json!({"foreground": [r, g, b, 1.0]}));
     }
+}
+
+fn window_composite_color(app: &mut PhotocraftApp, window: u64, idx: usize, x: f64, y: f64) -> Option<[f32; 3]> {
+    use photocraft_engine::sample_cmds::{SampleLayers, sample_color};
+    let (source, key) = super::display_doc(app, idx);
+    let (shown, _) = crate::view_visibility::render_window_document(app, window, idx, source, key);
+    let [r, g, b, a] = sample_color(&shown, None, x, y, app.ui.tool_options.eyedropper_size, SampleLayers::All);
+    (a > 0.0).then_some([r, g, b])
+}
+
+fn foreground_sample_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 3]> {
+    if app.alt_sampling && !app.secondary_canvas()
+        && let Some((window, doc)) = crate::view_visibility::validate_sampling_source(app)
+        && let Some(idx) = app.session.active_index()
+        && app.session.active().is_some_and(|st| st.doc.id == doc)
+    {
+        return window_composite_color(app, window, idx, x, y);
+    }
+    eyedropper_color(app, x, y)
 }
 
 /// The colour at document point (x, y) with the Eyedropper's Sample Size (the composite pixel,

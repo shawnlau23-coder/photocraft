@@ -725,6 +725,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             continue;
         }
         let Some(st) = app.session.documents().get(w.document) else { continue };
+        let doc = st.doc.id;
         let title = format!("{} — window {}", st.doc.name, w.id);
         let vid = egui::ViewportId::from_hash_of(("docwin", w.id));
         let mut builder = crate::os_window::builder().with_title(title).with_inner_size([800.0, 600.0]);
@@ -738,7 +739,10 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 close = true;
             }
             focused = ui.ctx().input(|i| i.viewport().focused == Some(true));
-            if focused && !w.focused && class != egui::ViewportClass::EmbeddedWindow {
+            if focused && class != egui::ViewportClass::EmbeddedWindow
+                && (!w.focused || super::canvas_pressed(ui.ctx(), doc, Some(w.id)) && ui.input(|i| i.pointer.any_pressed()))
+                && !super::secondary_sampling_click(app, ui.ctx(), doc, w.id)
+            {
                 app.ui.focused_window = Some(w.id);
                 app.session.set_active(w.document);
             }

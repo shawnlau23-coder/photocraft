@@ -998,6 +998,20 @@ fn handle_canvas_tool_navigation(
     }
 }
 
+pub(crate) fn secondary_sample_modifier(mods: egui::Modifiers) -> bool {
+    mods.alt && !mods.ctrl && !mods.shift && !mods.command
+}
+
+pub(crate) fn secondary_sampling_click(app: &PhotocraftApp, ctx: &egui::Context, doc: photocraft_doc::DocId, window: u64) -> bool {
+    let mods = crate::workspace_ui::sticky_mods(app, ctx.input(|i| i.modifiers));
+    secondary_sample_modifier(mods)
+        && app.active_tool() != Tool::Hand
+        && ctx.input(|i| !i.key_down(egui::Key::Space) && (i.pointer.primary_pressed() || i.pointer.primary_down()))
+        && canvas_pressed(ctx, doc, Some(window))
+        && !crate::panel_docking::modal_open(app, ctx)
+        && !egui::Popup::is_any_open(ctx)
+}
+
 /// Secondary canvases take only navigation and color sampling from the shared tool selection.
 fn handle_secondary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasToolInput<'_>) {
     let response = input.response;
@@ -1009,7 +1023,7 @@ fn handle_secondary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, vie
         clicked: response.clicked_by(PointerButton::Primary),
     };
     let sample_mods = crate::workspace_ui::sticky_mods(app, mods);
-    let alt_sample = sample_mods.alt && !sample_mods.ctrl && !sample_mods.shift && !sample_mods.command;
+    let alt_sample = secondary_sample_modifier(sample_mods);
     if !input.under_dialog && !crate::panel_docking::modal_open(app, input.ctx) && !egui::Popup::is_any_open(input.ctx) && !input.hand_pan
         && (alt_sample || input.tool == Tool::Eyedropper)
     {

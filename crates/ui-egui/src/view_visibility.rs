@@ -84,6 +84,7 @@ pub(crate) struct Composites {
     pub histograms: HashMap<u64, histograms::Cache>,
     pub editor: adjustments::EditorSession,
     pub rendering_window: Option<u64>,
+    pub sampling_source: Option<(u64, photocraft_doc::DocId)>,
     pub caches: HashMap<u64, Caches>,
     pub channels: HashMap<u64, HashMap<u64, crate::channel_view::Cache>>,
     pub gpu_frames: HashMap<crate::gpu_canvas::CompositeOutput, crate::canvas::SecondaryGpuFrame>,
@@ -144,6 +145,7 @@ pub(crate) fn initialize(app: &mut PhotocraftApp, id: u64) {
 /// Also runs after native window closure, so textures and metadata cannot outlive a view.
 pub(crate) fn retain(app: &mut PhotocraftApp) {
     let live: Vec<u64> = app.ui.windows.iter().filter(|w| w.open && w.document < app.session.documents().len()).map(|w| w.id).collect();
+    validate_sampling_source(app);
     let outputs: Vec<_> = secondary_outputs(app).collect();
     app.view_composites.gpu_frames.retain(|output, _| outputs.contains(output));
     app.view_composites.caches.retain(|id, _| live.contains(id));
@@ -254,10 +256,34 @@ fn project_with_key(app: &mut PhotocraftApp, window: u64, source: Arc<Document>,
     (shown, key)
 }
 
+pub(crate) fn validate_sampling_source(app: &mut PhotocraftApp) -> Option<(u64, photocraft_doc::DocId)> {
+    let (id, doc) = app.view_composites.sampling_source?;
+    if !app.ui.windows.iter().any(|w| w.id == id && w.open && app.session.documents().get(w.document).is_some_and(|st| st.doc.id == doc)) {
+        app.view_composites.sampling_source = None;
+    }
+    app.view_composites.sampling_source
+}
+
+pub(crate) fn set_sampling_source(app: &mut PhotocraftApp, id: u64, enabled: bool) {
+    if enabled {
+        if let Some(doc) = app.ui.windows.iter().find(|w| w.id == id && w.open)
+            .and_then(|w| app.session.documents().get(w.document))
+        {
+            app.view_composites.sampling_source = Some((id, doc.doc.id));
+        }
+    } else if app.view_composites.sampling_source.is_some_and(|(source, _)| source == id) {
+        app.view_composites.sampling_source = None;
+    }
+}
+
 /// Flattened filter previews have lost the layer identity needed to apply overrides. Secondary
 /// views keep the layered source until those operations commit; live paint remains layered.
 pub(crate) fn render_document(app: &mut PhotocraftApp, idx: usize, source: Arc<Document>, key: u64) -> (Arc<Document>, u64) {
     let Some(window) = app.view_composites.rendering_window else { return (source, key) };
+    render_window_document(app, window, idx, source, key)
+}
+
+pub(crate) fn render_window_document(app: &mut PhotocraftApp, window: u64, idx: usize, source: Arc<Document>, key: u64) -> (Arc<Document>, u64) {
     if settings_read_only(app, Some(window)) {
         return (source, key);
     }

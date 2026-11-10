@@ -133,6 +133,11 @@ pub(super) fn controls(app: &mut PhotocraftApp, ui: &mut Ui, w: &DocWindow, embe
             }
         });
         ui.menu_button(tl!("Settings"), |ui| {
+            let mut sampling = crate::view_visibility::validate_sampling_source(app).is_some_and(|(id, _)| id == w.id);
+            if ui.checkbox(&mut sampling, tl!("Use as Color Sampling Source")).changed() {
+                crate::view_visibility::set_sampling_source(app, w.id, sampling);
+                ui.ctx().request_repaint_of(ViewportId::ROOT);
+            }
             let mut independent = !w.follow_main_flip;
             if ui.checkbox(&mut independent, tl!("Independent Flip")).changed()
                 && let Some(win) = app.ui.windows.iter_mut().find(|win| win.id == w.id)
@@ -551,6 +556,9 @@ mod tests_interaction {
         h.run_steps(2);
         h.get_by_label("Independent Flip");
         h.get_by_label("Independent Settings");
+        h.get_by_label("Use as Color Sampling Source").click();
+        h.run_steps(2);
+        assert!(h.state().view_composites.sampling_source.is_some());
     }
 
     #[test]
@@ -562,6 +570,8 @@ mod tests_interaction {
         app.ui.focused_window = None;
         app.run("edit.fill", json!({"color":"#ff0000"})).unwrap();
         crate::menus::invoke(app, &ctx, "view.layerVisibility", json!({"window":id,"layer":layer.0,"visible":false})).unwrap();
+        let other = crate::menus::invoke(app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+        crate::view_visibility::set_sampling_source(app, other, true);
         app.ui.tool = crate::state::Tool::Move;
         app.ui.tool_options.eyedropper_sample = "current".into();
         let before = app.session.active().unwrap().clone();
@@ -576,6 +586,32 @@ mod tests_interaction {
             h.step();
         }
         assert_eq!(h.state().session.tools.foreground, [1.0; 4]);
+        assert_eq!(h.state().ui.focused_window, None, "sampling must not select the docked canvas");
+        assert_eq!(h.state().view_composites.sampling_source.unwrap().0, other);
+        let app = h.state_mut();
+        crate::view_visibility::set_sampling_source(app, id, true);
+        crate::view_visibility::set_sampling_source(app, other, false);
+        assert_eq!(app.view_composites.sampling_source.unwrap().0, id);
+        app.ui.windows.iter_mut().find(|w| w.id == id).unwrap().view.rotation = 0.7;
+        app.ui.windows.iter_mut().find(|w| w.id == id).unwrap().view.flip_horizontal = true;
+        app.ui.tool = crate::state::Tool::Brush;
+        let xf = crate::canvas::view_xform::ViewXform {
+            rect: Rect::from_min_max(pos2(0.0, 0.0), pos2(480.0, 320.0)),
+            zoom: 2.5, center: [48.0, 32.0], rotation: 37.0, flip: true, flip_vertical: true, aspect: 1.0,
+        };
+        let [x, y] = xf.to_doc(xf.to_screen(12.5, 10.5));
+        assert!((x - 12.5).abs() < 0.001 && (y - 10.5).abs() < 0.001);
+        app.run("tools.setColors", json!({"foreground":"#0000ff"})).unwrap();
+        assert!(super::super::cursors::alt_eyedropper(app, super::super::tool_input::ToolEvent::Down { x, y, pressure: 1.0 }, mods));
+        assert_eq!(app.session.tools.foreground, [1.0; 4]);
+        app.ui.tool_options.eyedropper_size = 3;
+        assert_eq!(crate::canvas::eyedropper_ring_colors(app, x, y).unwrap().0, egui::Color32::WHITE);
+        crate::view_visibility::set_sampling_source(app, id, false);
+        assert_eq!(crate::canvas::eyedropper_ring_colors(app, x, y).unwrap().0, egui::Color32::RED);
+        crate::view_visibility::set_sampling_source(app, id, true);
+        app.ui.windows.iter_mut().find(|w| w.id == id).unwrap().open = false;
+        assert_eq!(crate::canvas::eyedropper_ring_colors(app, x, y).unwrap().0, egui::Color32::RED);
+        assert!(app.view_composites.sampling_source.is_none());
         let after = h.state().session.active().unwrap();
         assert!(std::sync::Arc::ptr_eq(&before.doc, &after.doc));
         assert_eq!(before.history.past_len(), after.history.past_len());

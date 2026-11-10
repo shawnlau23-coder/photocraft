@@ -115,7 +115,11 @@ impl PhotocraftApp {
         }
         if root_focused && ctx.input(|i| i.pointer.any_pressed()) {
             if let Some(id) = crate::canvas::docked_view::pressed(self, ctx) {
-                self.ui.focused_window = Some(id);
+                if let Some(st) = self.session.active()
+                    && !crate::canvas::secondary_sampling_click(self, ctx, st.doc.id, id)
+                {
+                    self.ui.focused_window = Some(id);
+                }
             } else if let Some((index, _)) = self.session.documents().iter().enumerate().find(|(index, st)| {
                 !crate::view_cmds::document_is_floating(self, *index) && crate::canvas::canvas_pressed(ctx, st.doc.id, None)
             }) {
@@ -129,7 +133,13 @@ impl PhotocraftApp {
                 .windows
                 .iter()
                 .find(|w| {
-                    w.open && !crate::canvas::docked_view::contains(self, w.id) && ctx.input(|i| i.raw.viewports.get(&egui::ViewportId::from_hash_of(("docwin", w.id))).is_some_and(|v| v.focused == Some(true)))
+                    let viewport = egui::ViewportId::from_hash_of(("docwin", w.id));
+                    // Alt activation is resolved inside the child viewport, where the canvas
+                    // response and pointer event are available.
+                    w.open && !w.focused && !crate::canvas::docked_view::contains(self, w.id)
+                        && !ctx.input(|i| crate::canvas::secondary_sample_modifier(crate::workspace_ui::sticky_mods(self, i.modifiers)))
+                        && !ctx.input_for(viewport, |i| crate::canvas::secondary_sample_modifier(i.modifiers))
+                        && ctx.input(|i| i.raw.viewports.get(&viewport).is_some_and(|v| v.focused == Some(true)))
                 })
                 .map(|w| (w.id, w.document));
             if let Some((id, document)) = window {
