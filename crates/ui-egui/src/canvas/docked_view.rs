@@ -112,9 +112,8 @@ pub(super) fn detach(app: &mut PhotocraftApp, ctx: &egui::Context, id: u64, clos
 }
 
 pub(super) fn controls(app: &mut PhotocraftApp, ui: &mut Ui, w: &DocWindow, embedded: bool) {
-    let compact = ui.available_width() < 210.0;
     ui.horizontal(|ui| {
-        ui.menu_button(if compact { tl!("Dock") } else { tl!("Dock Position") }, |ui| {
+        ui.menu_button(tl!("Dock"), |ui| {
             ui.add_enabled_ui(can_dock(app, w), |ui| {
                 for (side, label) in [(Side::Left, tl!("Left")), (Side::Right, tl!("Right")), (Side::Top, tl!("Top")), (Side::Bottom, tl!("Bottom"))] {
                     if ui.button(label).clicked() {
@@ -124,6 +123,16 @@ pub(super) fn controls(app: &mut PhotocraftApp, ui: &mut Ui, w: &DocWindow, embe
                 }
             });
             ui.separator();
+            if embedded && ui.button(tl!("Float")).clicked() {
+                detach(app, ui.ctx(), w.id, false);
+                ui.close();
+            }
+            if ui.button(tl!("Close View")).clicked() {
+                detach(app, ui.ctx(), w.id, true);
+                ui.close();
+            }
+        });
+        ui.menu_button(tl!("Settings"), |ui| {
             let mut independent = !w.follow_main_flip;
             if ui.checkbox(&mut independent, tl!("Independent Flip")).changed()
                 && let Some(win) = app.ui.windows.iter_mut().find(|win| win.id == w.id)
@@ -136,12 +145,6 @@ pub(super) fn controls(app: &mut PhotocraftApp, ui: &mut Ui, w: &DocWindow, embe
                 crate::view_visibility::set_follow_main_settings(app, ui.ctx(), w.id, !settings);
             }
         });
-        if embedded && ui.button(tl!("Float")).clicked() {
-            detach(app, ui.ctx(), w.id, false);
-        }
-        if ui.button(if compact { "×" } else { tl!("Close View") }).on_hover_text(tl!("Close View")).clicked() {
-            detach(app, ui.ctx(), w.id, true);
-        }
     });
 }
 
@@ -534,6 +537,48 @@ mod tests_interaction {
             h.step();
         }
         h.run_steps(2);
+    }
+
+    #[test]
+    fn docking_toolbar_groups_window_actions_and_settings() {
+        let (mut h, _) = harness(false);
+        h.get_by_label("Dock").click();
+        h.run_steps(2);
+        for label in ["Left", "Right", "Top", "Bottom", "Float", "Close View"] {
+            h.get_by_label(label);
+        }
+        h.get_by_label("Settings").click();
+        h.run_steps(2);
+        h.get_by_label("Independent Flip");
+        h.get_by_label("Independent Settings");
+    }
+
+    #[test]
+    fn docking_alt_click_samples_the_secondary_composite_and_keeps_document_read_only() {
+        let (mut h, id) = harness(false);
+        let ctx = h.ctx.clone();
+        let app = h.state_mut();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        app.ui.focused_window = None;
+        app.run("edit.fill", json!({"color":"#ff0000"})).unwrap();
+        crate::menus::invoke(app, &ctx, "view.layerVisibility", json!({"window":id,"layer":layer.0,"visible":false})).unwrap();
+        app.ui.tool = crate::state::Tool::Move;
+        app.ui.tool_options.eyedropper_sample = "current".into();
+        let before = app.session.active().unwrap().clone();
+        h.run_steps(3);
+        let p = h.state().docked_view.as_ref().unwrap().panes[0].rect.unwrap().center();
+        let mods = Modifiers { alt: true, ..Modifiers::NONE };
+        h.event(Event::ModifiersChanged(mods));
+        h.event(Event::PointerMoved(p));
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: mods });
+            h.step();
+        }
+        assert_eq!(h.state().session.tools.foreground, [1.0; 4]);
+        let after = h.state().session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before.doc, &after.doc));
+        assert_eq!(before.history.past_len(), after.history.past_len());
     }
 
     #[test]

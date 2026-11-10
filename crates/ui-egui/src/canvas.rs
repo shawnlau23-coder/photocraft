@@ -1008,6 +1008,20 @@ fn handle_secondary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, vie
         stopped: response.drag_stopped_by(PointerButton::Primary),
         clicked: response.clicked_by(PointerButton::Primary),
     };
+    let sample_mods = crate::workspace_ui::sticky_mods(app, mods);
+    let alt_sample = sample_mods.alt && !sample_mods.ctrl && !sample_mods.shift && !sample_mods.command;
+    if !input.under_dialog && !crate::panel_docking::modal_open(app, input.ctx) && !egui::Popup::is_any_open(input.ctx) && !input.hand_pan
+        && (alt_sample || input.tool == Tool::Eyedropper)
+    {
+        if let Some(p) = response.hover_pos() {
+            input.ctx.set_cursor_icon(pipette_cursor(input.ctx, p));
+            if buttons.clicked || (response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down())) {
+                let [x, y] = input.xf.to_doc(p);
+                cursors::sample_secondary_composite(app, input.idx, x, y);
+            }
+        }
+        return;
+    }
     match input.tool {
         Tool::Zoom | Tool::RotateView if !input.under_dialog => {
             handle_canvas_tool_navigation(app, ui, view, input, &mut buttons);
@@ -1023,19 +1037,7 @@ fn handle_secondary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, vie
             }
         }
         Tool::Hand if response.hovered() => input.ctx.set_cursor_icon(crate::tool_cursor::hand(input.ctx, false)),
-        _ => {
-            let mods = crate::workspace_ui::sticky_mods(app, mods);
-            let temporary = cursors::alt_samples(input.tool, mods) || cursors::alt_loads_mixer(input.tool, mods);
-            if !input.under_dialog && (input.tool == Tool::Eyedropper || temporary)
-                && let Some(p) = response.hover_pos()
-            {
-                input.ctx.set_cursor_icon(pipette_cursor(input.ctx, p));
-                if response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down()) {
-                    let [x, y] = input.xf.to_doc(p);
-                    cursors::sample_eyedropper(app, x, y, if temporary { egui::Modifiers::NONE } else { mods });
-                }
-            }
-        }
+        _ => {}
     }
 }
 

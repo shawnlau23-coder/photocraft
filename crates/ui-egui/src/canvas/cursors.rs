@@ -182,6 +182,17 @@ pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: e
     }
 }
 
+/// Sample the same projected document as the secondary canvas, without GPU readback.
+pub(super) fn sample_secondary_composite(app: &mut PhotocraftApp, idx: usize, x: f64, y: f64) {
+    use photocraft_engine::sample_cmds::{SampleLayers, sample_color};
+    let (source, key) = super::display_doc(app, idx);
+    let (shown, _) = crate::view_visibility::render_document(app, idx, source, key);
+    let [r, g, b, a] = sample_color(&shown, None, x, y, app.ui.tool_options.eyedropper_size, SampleLayers::All);
+    if a > 0.0 {
+        let _ = app.run("tools.setColors", json!({"foreground": [r, g, b, 1.0]}));
+    }
+}
+
 /// The colour at document point (x, y) with the Eyedropper's Sample Size (the composite pixel,
 /// or the average of the square around it) from the layers `sample_layer` names (`document.sampleColor`).
 /// `None` off the image or over transparency.
