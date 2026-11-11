@@ -79,7 +79,11 @@ impl PhotocraftApp {
 
     pub(crate) fn set_flip(&mut self, ctx: &egui::Context, vertical: bool, flipped: bool) {
         let set = |v: &mut crate::state::View| {
-            if vertical { v.flip_vertical = flipped; } else { v.flip_horizontal = flipped; }
+            if vertical {
+                v.flip_vertical = flipped;
+            } else {
+                v.flip_horizontal = flipped;
+            }
         };
         if !self.flip_enabled() {
             return;
@@ -120,9 +124,13 @@ impl PhotocraftApp {
                 {
                     self.ui.focused_window = Some(id);
                 }
-            } else if let Some((index, _)) = self.session.documents().iter().enumerate().find(|(index, st)| {
-                !crate::view_cmds::document_is_floating(self, *index) && crate::canvas::canvas_pressed(ctx, st.doc.id, None)
-            }) {
+            } else if let Some((index, _)) = self
+                .session
+                .documents()
+                .iter()
+                .enumerate()
+                .find(|(index, st)| !crate::view_cmds::document_is_floating(self, *index) && crate::canvas::canvas_pressed(ctx, st.doc.id, None))
+            {
                 self.ui.focused_window = None;
                 self.session.set_active(index);
             }
@@ -136,7 +144,9 @@ impl PhotocraftApp {
                     let viewport = egui::ViewportId::from_hash_of(("docwin", w.id));
                     // Alt activation is resolved inside the child viewport, where the canvas
                     // response and pointer event are available.
-                    w.open && !w.focused && !crate::canvas::docked_view::contains(self, w.id)
+                    w.open
+                        && !w.focused
+                        && !crate::canvas::docked_view::contains(self, w.id)
                         && !ctx.input(|i| crate::canvas::secondary_sample_modifier(crate::workspace_ui::sticky_mods(self, i.modifiers)))
                         && !ctx.input_for(viewport, |i| crate::canvas::secondary_sample_modifier(i.modifiers))
                         && ctx.input(|i| i.raw.viewports.get(&viewport).is_some_and(|v| v.focused == Some(true)))
@@ -162,12 +172,16 @@ impl PhotocraftApp {
         }
         let document_id = self.session.documents().get(document)?.doc.id;
         let main = std::mem::replace(self.ui.views.get_mut(document)?, camera);
+        let previous_main = self.view_composites.scoped_main_camera.replace((document_id, main));
         let (rect, ppp) = (self.last_canvas_rect, self.ppp);
         let rendering_window = self.view_composites.rendering_window.replace(id);
+        let drawing_window = self.drawing_window.replace(id);
         let result = draw(self);
+        self.drawing_window = drawing_window;
         self.view_composites.rendering_window = rendering_window;
+        let main = std::mem::replace(&mut self.view_composites.scoped_main_camera, previous_main);
         let document = self.session.documents().iter().position(|st| st.doc.id == document_id);
-        if let Some(slot) = document.and_then(|i| self.ui.views.get_mut(i)) {
+        if let (Some((_, main)), Some(slot)) = (main, document.and_then(|i| self.ui.views.get_mut(i))) {
             let mut camera = std::mem::replace(slot, main);
             if following {
                 (camera.flip_horizontal, camera.flip_vertical) = saved_flip;

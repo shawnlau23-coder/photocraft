@@ -111,6 +111,9 @@ pub(crate) struct Redraw {
     stop: Arc<AtomicBool>,
     started_ms: f64,
     fallback: Option<crate::render_path::CpuReason>,
+    /// Time spent on the failed GPU composite attempts that led to this redraw (ms), recorded once
+    /// when it ends.
+    gpu_attempt_ms: f64,
     /// The state the blocks are drawn from, and what the texels depend on besides it.
     doc: Arc<Document>,
     display: u64,
@@ -190,7 +193,15 @@ pub(crate) struct KeptComposites {
 
 impl KeptComposites {
     /// The kept redraw of exactly this state, now the newest.
-    fn find(&mut self, output: crate::gpu_canvas::CompositeOutput, doc: &Arc<Document>, display: u64, text_gamma: u32, format: eframe::wgpu::TextureFormat, blocks: &[Rect]) -> Option<&Kept> {
+    fn find(
+        &mut self,
+        output: crate::gpu_canvas::CompositeOutput,
+        doc: &Arc<Document>,
+        display: u64,
+        text_gamma: u32,
+        format: eframe::wgpu::TextureFormat,
+        blocks: &[Rect],
+    ) -> Option<&Kept> {
         let i = self.entries.iter().position(|k| k.output == output && k.matches(doc, display, text_gamma, format, blocks))?;
         let k = self.entries.remove(i)?;
         self.entries.push_front(k);
@@ -287,6 +298,7 @@ pub(crate) fn start(
     visible: Rect,
     region: Rect,
     fallback: Option<crate::render_path::CpuReason>,
+    gpu_attempt_ms: f64,
 ) {
     if output.document != doc.id || !output_live(app, output) {
         return;
@@ -297,15 +309,21 @@ pub(crate) fn start(
     // Taken again when a running redraw continues: the edit (or Memory Usage) may have changed it.
     let cap = keep_cap(app, doc.id);
     app.kept.trim(cap);
-    let (mut pending, since, fallback, mut keep) = match app.redraws.remove(&output) {
+    let (mut pending, since, fallback, gpu_attempt_ms, mut keep) = match app.redraws.remove(&output) {
         Some(mut old) if old.blocks == all => {
             // Blocks drawn from another state aren't part of this one's composite.
             let same = old.display == display_key && old.text_gamma == gamma && (Arc::ptr_eq(&old.doc, &doc) || *old.doc == *doc);
             let (collected, bytes) =
                 if same && old.collected_bytes <= cap { (std::mem::take(&mut old.collected), old.collected_bytes) } else { (vec![None; all.len()], 0) };
-            (std::mem::take(&mut old.pending), (old.started_ms, old.drawn), fallback.or_else(|| old.fallback.take()), (collected, bytes, cap))
+            (
+                std::mem::take(&mut old.pending),
+                (old.started_ms, old.drawn),
+                fallback.or_else(|| old.fallback.take()),
+                gpu_attempt_ms + old.gpu_attempt_ms,
+                (collected, bytes, cap),
+            )
         }
-        _ => (vec![false; all.len()], (crate::gpu_canvas::now_ms(), 0), fallback, (vec![None; all.len()], 0, cap)),
+        _ => (vec![false; all.len()], (crate::gpu_canvas::now_ms(), 0), fallback, gpu_attempt_ms, (vec![None; all.len()], 0, cap)),
     };
     for (p, b) in pending.iter_mut().zip(&all) {
         *p |= !b.intersect(&region).is_empty();
@@ -332,14 +350,26 @@ pub(crate) fn start(
         }
         keep = (vec![None; all.len()], 0, keep.2);
     }
-    spawn(app, ctx, Spawn { output, doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, keep });
+    spawn(
+        app,
+        ctx,
+        Spawn { output, doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, gpu_attempt_ms, keep },
+    );
 }
 
 /// After an edit drew its own damage: continue document `doc.id`'s redraw, if one is running, on
 /// the edited document, so blocks still to come don't bring back what was there before it.
-pub(crate) fn restart(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas, output: crate::gpu_canvas::CompositeOutput, doc: Arc<Document>, display: Option<Arc<CanvasDisplay>>, visible: Rect) {
+pub(crate) fn restart(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    gpu: &GpuCanvas,
+    output: crate::gpu_canvas::CompositeOutput,
+    doc: Arc<Document>,
+    display: Option<Arc<CanvasDisplay>>,
+    visible: Rect,
+) {
     if app.redraws.contains_key(&output) {
-        start(app, ctx, gpu, output, doc, display, visible, Rect::EMPTY, None);
+        start(app, ctx, gpu, output, doc, display, visible, Rect::EMPTY, None, 0.0);
     }
 }
 
@@ -394,6 +424,7 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, output: impl Into<c
     }
     let ms = crate::gpu_canvas::now_ms() - r.started_ms;
     app.perf.record("background", r.drawn, ms, 0.0);
+    app.perf.record_gpu_attempt(r.gpu_attempt_ms);
     crate::notices::slow_cpu_refresh(app, doc.0, ms, r.fallback.as_ref());
 }
 
@@ -463,7 +494,8 @@ pub(crate) fn retain(app: &mut PhotocraftApp) {
         return;
     }
     let docs = app.session.documents();
-    let mut ids: Vec<(DocId, u64)> = app.kept.entries.iter().filter_map(|k| docs.iter().find(|st| st.doc.id == k.output.document).map(|st| (k.output.document, st.revision))).collect();
+    let mut ids: Vec<(DocId, u64)> =
+        app.kept.entries.iter().filter_map(|k| docs.iter().find(|st| st.doc.id == k.output.document).map(|st| (k.output.document, st.revision))).collect();
     ids.dedup();
     let capped = (ids, app.session.prefs().performance.history_budget_bytes() as u64);
     if capped != app.kept.capped {
@@ -487,6 +519,7 @@ struct Spawn {
     /// When it started and the pixels uploaded so far.
     since: (f64, u64),
     fallback: Option<crate::render_path::CpuReason>,
+    gpu_attempt_ms: f64,
     /// Blocks collected for [`Kept`], their bytes, and the cap.
     keep: (Vec<Option<Vec<u8>>>, u64, u64),
 }
@@ -504,6 +537,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
         pending,
         since: (started_ms, drawn),
         fallback,
+        gpu_attempt_ms,
         keep: (collected, collected_bytes, cap),
     } = s;
     let kept_doc = doc.clone();
@@ -544,6 +578,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
             stop,
             started_ms,
             fallback,
+            gpu_attempt_ms,
             doc: kept_doc,
             display: display_key,
             text_gamma,

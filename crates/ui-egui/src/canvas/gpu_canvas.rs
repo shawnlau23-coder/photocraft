@@ -34,27 +34,31 @@ use eframe::wgpu;
 
 use crate::render_path::CpuReason;
 
+pub use pages::{MAX_PAGE_SIDE, PageUpload};
 pub use photocraft_gpu::{DeviceHealth, Fault};
 
 mod budget;
 mod callback;
+mod compositor_build;
 mod doc_textures;
+mod pages;
 mod perf;
+mod residency;
 mod resources;
 mod setup;
 mod shaders;
 mod texels;
 
+#[cfg(all(test, windows))]
+use budget::detect_video_memory;
 #[cfg(all(test, target_os = "linux"))]
 use budget::nvidia_video_memory;
 pub use budget::{
-    DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, canvas_budget, canvas_texture_bytes, memory_budget,
-    physical_memory, video_memory, vram_share,
+    COMPOSITOR_BUILDING, DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, canvas_budget, canvas_texture_bytes,
+    memory_budget, physical_memory, video_memory, vram_share,
 };
 #[cfg(test)]
 use budget::{NVIDIA_VENDOR, bounded_output, drm_video_memory, parse_nvidia_smi};
-#[cfg(all(test, windows))]
-use budget::{detect_physical_memory, detect_video_memory};
 use callback::CanvasCallback;
 #[cfg(test)]
 use callback::{filter_mode, map_doc_px, tile_screen_aabb};
@@ -62,6 +66,8 @@ use doc_textures::init_buffer;
 #[cfg(test)]
 use doc_textures::{mip_count, mip_damage};
 pub use perf::{GpuInfo, Perf, backend_name, now_ms};
+#[cfg(all(test, windows))]
+use photocraft_engine::memory::detect_physical_memory;
 pub use resources::CanvasStyle;
 #[cfg(test)]
 use resources::DocTextures;
@@ -95,7 +101,7 @@ const FORMAT_HIGH: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const F16_BUDGET_PX: u64 = 100_000_000;
 const VIEW_UNIFORM_SIZE: u64 = 144;
 const VIEW_FLOATS: usize = 36;
-const TILE_UNIFORM_SIZE: u64 = 16;
+const TILE_UNIFORM_SIZE: u64 = 32;
 
 /// The legacy Main View flip and non-square pixel aspect still use the CPU canvas.
 /// Native secondaries apply reflection in the presentation shader.
@@ -207,6 +213,8 @@ pub struct GpuCanvas {
     /// Camera Raw's preview pass, built the first time the dialog asks (#6419).
     camera_raw: crate::camera_raw_gpu::Slot,
     camera_raw_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    compositor_build: compositor_build::Slot,
+    compositor_completion: compositor_build::Completion,
 }
 
 /// Whether `regenerate_mips` builds each level in a scratch texture and copies it back: on
@@ -264,7 +272,61 @@ impl GpuCanvas {
             rs.target_format,
             vram.map_or_else(|| "unknown".to_owned(), |b| format!("{} MB", b >> 20))
         );
-        Self { rs: rs.clone(), tile, high, health, vram, canvas_budget: budget, camera_raw: Default::default(), camera_raw_started: Default::default() }
+        Self {
+            rs: rs.clone(),
+            tile,
+            high,
+            health,
+            vram,
+            canvas_budget: budget,
+            camera_raw: Default::default(),
+            camera_raw_started: Default::default(),
+            compositor_build: Default::default(),
+            compositor_completion: Default::default(),
+        }
+    }
+
+    /// Start compositor compilation off the UI thread on native hardware.
+    pub fn start_compositor(&self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.rs.adapter.get_info().device_type != wgpu::DeviceType::Cpu && std::env::var_os("PHOTOCRAFT_CPU_COMPOSE").is_none() {
+            compositor_build::start(
+                &self.rs.device,
+                photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter),
+                ctx,
+                &self.compositor_build,
+                &self.compositor_completion,
+            );
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = ctx;
+    }
+
+    /// Key the memo to this device, application and shader compiler.
+    pub fn compositor_memo_key(&self, compiler: &str) -> crate::gpu_memo::MemoKey {
+        let info = self.rs.adapter.get_info();
+        crate::gpu_memo::MemoKey {
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            shader_fingerprint: photocraft_gpu::shader_fingerprint(),
+            adapter_name: info.name,
+            vendor: info.vendor,
+            device: info.device,
+            driver: info.driver,
+            driver_info: info.driver_info,
+            backend: format!("{:?}", info.backend),
+            shader_compiler: compiler.into(),
+        }
+    }
+
+    /// Use a known deterministic failure without recompiling the same shaders.
+    pub fn remember_compositor_failure(&self, error: &str) {
+        *self.compositor_build.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            compositor_build::BuildState::Failed(photocraft_gpu::Unsupported(format!("remembered from an earlier launch: {error}")));
+    }
+
+    /// Take the background build result once, independently of compositor adoption.
+    pub fn take_compositor_completion(&self) -> Option<Result<(), (String, bool)>> {
+        self.compositor_completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
     }
 
     /// The device's health flag (shared with the wgpu compositor and the paint callback).
@@ -364,7 +426,7 @@ impl GpuCanvas {
     pub fn texture_info(&self, key: impl Into<CanvasTextureKey>) -> Option<(wgpu::TextureFormat, u64)> {
         let r = self.rs.renderer.read();
         let d = r.callback_resources.get::<Resources>()?.docs.get(&key.into())?;
-        Some((d.format, d.bytes))
+        Some((d.format, d.bytes()))
     }
 
     /// Set the GPU memory the wgpu compositor may hold for layer pages and caches (see
@@ -382,24 +444,43 @@ impl GpuCanvas {
         r.callback_resources.get::<Resources>()?.compositor_budget
     }
 
-    /// Set the GPU bytes one document's display texture set may take (see [`canvas_budget`]).
+    /// Set the GPU bytes the open documents' display textures may take together (see
+    /// [`canvas_budget`] and [`GpuCanvas::show_documents`]).
     pub fn set_canvas_budget(&self, bytes: u64) {
         self.canvas_budget.store(bytes, Ordering::Relaxed);
     }
 
-    /// Whether `doc`'s display textures fit [`canvas_budget`]; when they don't, nothing is
-    /// created for it and it is drawn on the CPU canvas.
+    /// Whether `doc`'s display textures fit its share of [`canvas_budget`]; when they don't,
+    /// nothing is created for it and it is drawn from viewport pages or on the CPU canvas.
     pub fn fits_canvas(&self, doc: &photocraft_doc::Document) -> bool {
         self.canvas_fit(doc).is_some_and(|(bytes, budget)| bytes <= budget)
     }
 
-    /// The bytes `doc`'s display textures would take and [`canvas_budget`] (`None` without a GPU
-    /// canvas): the numbers of a [`CpuReason::CanvasTooLarge`].
-    pub fn canvas_fit(&self, doc: &photocraft_doc::Document) -> Option<(u64, u64)> {
+    /// The bytes `doc`'s whole-document texture set would take.
+    pub fn canvas_bytes(&self, doc: &photocraft_doc::Document) -> u64 {
         let size = [doc.size.width, doc.size.height];
-        let bytes = canvas_texture_bytes(size, self.tile, texel_bytes(self.format_for(doc.depth, size)));
+        canvas_texture_bytes(size, self.tile, texel_bytes(self.format_for(doc.depth, size)))
+    }
+
+    /// The bytes `doc`'s display textures would take and its share of [`canvas_budget`] (`None`
+    /// without a GPU canvas): the numbers of a [`CpuReason::CanvasTooLarge`]. Alone on screen a
+    /// document has the whole budget; see [`GpuCanvas::show_documents`].
+    pub fn canvas_fit(&self, doc: &photocraft_doc::Document) -> Option<(u64, u64)> {
+        let bytes = self.canvas_bytes(doc);
         let r = self.rs.renderer.read();
-        r.callback_resources.get::<Resources>().map(|res| (bytes, res.canvas_budget.load(Ordering::Relaxed)))
+        r.callback_resources.get::<Resources>().map(|res| (bytes, res.residency.share(res.canvas_budget.load(Ordering::Relaxed), doc.id.0, bytes)))
+    }
+
+    /// The documents the app's windows show now, with [`GpuCanvas::canvas_bytes`] of each: they
+    /// split [`canvas_budget`] (see [`residency`]), and the textures of documents not among them
+    /// are freed first when a shown one needs the room. Cheap when nothing changed.
+    pub fn show_documents(&self, shown: &[(u64, u64)]) {
+        if self.rs.renderer.read().callback_resources.get::<Resources>().is_none_or(|res| res.residency.shows(shown)) {
+            return;
+        }
+        if let Some(res) = self.rs.renderer.write().callback_resources.get_mut::<Resources>() {
+            res.residency.publish(shown);
+        }
     }
 
     /// Act as if the driver couldn't build the compositor's pipelines (the DX12 FXC X3507 case,
@@ -418,6 +499,28 @@ impl GpuCanvas {
         if let Some(res) = self.rs.renderer.write().callback_resources.get_mut::<Resources>() {
             res.fail_secondary_allocation = true;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn simulate_compositor_build(&self) {
+        *self.compositor_build.lock().unwrap() = compositor_build::BuildState::Building;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn simulate_compositor_completion(&self, success: bool) -> bool {
+        let (state, outcome) = if success {
+            let Ok(comp) = photocraft_gpu::Compositor::try_new_with_format(&self.rs.device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter))
+            else {
+                return false;
+            };
+            (compositor_build::BuildState::Ready(Box::new(comp)), Ok(()))
+        } else {
+            let message = "simulated build failure".to_string();
+            (compositor_build::BuildState::Failed(photocraft_gpu::Unsupported(message.clone())), Err((message, false)))
+        };
+        *self.compositor_build.lock().unwrap() = state;
+        *self.compositor_completion.lock().unwrap() = Some(outcome);
+        true
     }
 
     /// Why the compositor couldn't be built, once it couldn't (see [`GpuCanvas::composite`]).
@@ -439,6 +542,9 @@ impl GpuCanvas {
         if e.0 == OVER_CANVAS_BUDGET {
             let (bytes, budget) = self.canvas_fit(doc).unwrap_or_default();
             return CpuReason::CanvasTooLarge { bytes, budget };
+        }
+        if e.0 == COMPOSITOR_BUILDING {
+            return CpuReason::CompositorBuilding;
         }
         if self.compositor_failed().is_some_and(|f| f == e.0) {
             return CpuReason::CompositorBuild(e.0);
@@ -651,6 +757,22 @@ impl GpuCanvas {
         // A driver that couldn't build the pipelines once won't later: stay on the CPU compositor.
         if let Some(e) = &res.compositor_failed {
             return Err(e.clone());
+        }
+        {
+            let mut state = self.compositor_build.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            match std::mem::replace(&mut *state, compositor_build::BuildState::Adopted) {
+                compositor_build::BuildState::Building => {
+                    *state = compositor_build::BuildState::Building;
+                    return Err(photocraft_gpu::Unsupported(COMPOSITOR_BUILDING.into()));
+                }
+                compositor_build::BuildState::Ready(comp) => res.compositor = Some(*comp),
+                compositor_build::BuildState::Failed(error) => {
+                    res.compositor_failed = Some(error.clone());
+                    return Err(error);
+                }
+                compositor_build::BuildState::NotStarted => *state = compositor_build::BuildState::NotStarted,
+                compositor_build::BuildState::Adopted => (),
+            }
         }
         let mut comp = match res.compositor.take() {
             Some(c) => c,
@@ -876,8 +998,12 @@ impl GpuCanvas {
                 out.gpu = stats.gpu_time;
                 return out;
             }
-            Err(e) => out.fallback = Some(self.reason(doc, e)),
+            Err(e) => {
+                out.gpu_attempt_ms = now_ms() - t0;
+                out.fallback = Some(self.reason(doc, e));
+            }
         }
+        let t0 = now_ms();
         let px = region.width() as u64 * region.height() as u64;
         if defer && px >= DEFER_PX && self.prepare_texture(key, doc).is_some() {
             out.kind = REFRESH_DEFERRED;
@@ -919,7 +1045,12 @@ impl GpuCanvas {
     /// Composite the whole of `doc` with the CPU compositor into document `key`'s texture, band by
     /// band (each band converted and uploaded before the next is rendered), so a huge document
     /// never needs a full-size float composite or texture-format copy in memory.
-    pub fn upload_composite(&self, key: impl Into<CanvasTextureKey>, doc: &photocraft_doc::Document, display: Option<&photocraft_engine::display_color::CanvasDisplay>) -> bool {
+    pub fn upload_composite(
+        &self,
+        key: impl Into<CanvasTextureKey>,
+        doc: &photocraft_doc::Document,
+        display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+    ) -> bool {
         let size = [doc.size.width, doc.size.height];
         let key = key.into();
         let Some(format) = self.prepare_texture(key, doc) else { return false };
@@ -966,11 +1097,8 @@ impl GpuCanvas {
         let format = self.format_for(doc.depth, size);
         let mut renderer = self.rs.renderer.write();
         let res = renderer.callback_resources.get_mut::<Resources>()?;
-        let shared_extra = if matches!(key, CanvasTextureKey::Secondary { .. }) {
-            res.compositor.as_ref().map_or(0, |comp| comp.auxiliary_texture_bytes(0))
-        } else {
-            0
-        };
+        let shared_extra =
+            if matches!(key, CanvasTextureKey::Secondary { .. }) { res.compositor.as_ref().map_or(0, |comp| comp.auxiliary_texture_bytes(0)) } else { 0 };
         let bytes = canvas_texture_bytes(size, self.tile, texel_bytes(format));
         if matches!(key, CanvasTextureKey::Secondary { .. }) && !res.output_fits(key, bytes, shared_extra) {
             res.docs.remove(&key);
@@ -1014,6 +1142,7 @@ impl GpuCanvas {
         // or a preserved-ID reopen can skip rebuilding a missing LUT.
         res.views.retain(|_, view| !matches!(view.texture, CanvasTextureKey::Secondary { .. }) || live.contains(&view.texture));
         res.luts.retain(|k, _| live.contains(&k.0));
+        res.residency.retain(|d| documents.contains(&photocraft_doc::DocId(d)));
         res.display_lut_signatures.retain(|k, _| live.contains(&k.0));
     }
 

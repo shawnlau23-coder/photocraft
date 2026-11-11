@@ -188,7 +188,7 @@ fn blend_special_layers_match_existing_cpu_semantics_and_masks_stay_shared() {
             let projected = shown(&mut app, w);
             let mut reference = (*canonical).clone();
             reference.layer_mut(target).unwrap().blend = *mode;
-            let render = |doc: &Document| photocraft_compose::render(doc, doc.bounds()).px;
+            let render = |doc: &Document| photocraft_compose::render(doc, doc.bounds()).into_px();
             assert_eq!(render(&projected), render(&reference), "{kind}: {mode:?}");
             let original_mask = &canonical.layer(blue).unwrap().mask.as_ref().unwrap().surface;
             let shown_mask = &projected.layer(blue).unwrap().mask.as_ref().unwrap().surface;

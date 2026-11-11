@@ -337,6 +337,31 @@ fn keyboard_zoom_pass(app: &mut PhotocraftApp, ctx: &egui::Context, window: Opti
 }
 
 #[test]
+fn independent_views_focus_main_from_floating_view_menu_and_custom_shortcut() {
+    let (mut app, ctx) = app();
+    let id = window(&mut app, &ctx);
+    let command = "window.focusMainCanvas";
+    app.ui.focused_window = Some(id);
+    let before = app.session.active().unwrap().clone();
+    let main = app.ui.views[0].clone();
+    menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+    assert_eq!(crate::view_visibility::panel_window(&app), None);
+
+    app.session.edit_prefs(|p| {
+        p.shortcuts.insert(command.into(), "Cmd+Shift+F11".into());
+    });
+    app.ui.focused_window = Some(id);
+    assert!(keyboard_zoom_pass(&mut app, &ctx, Some(id), egui::Key::F11, true, true));
+    assert_eq!(app.ui.focused_window, None);
+    assert_eq!(crate::view_visibility::panel_window(&app), None);
+    assert_eq!(app.ui.views[0], main);
+    let after = app.session.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before.doc, &after.doc));
+    assert_eq!(before.active_layer, after.active_layer);
+    assert_eq!(before.history.past_len(), after.history.past_len());
+}
+
+#[test]
 fn keyboard_zoom_steps_both_window_types_without_changing_the_other_camera() {
     for animated in [false, true] {
         for (key, shift) in [(egui::Key::Equals, false), (egui::Key::Plus, false), (egui::Key::Plus, true)] {

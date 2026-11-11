@@ -587,6 +587,7 @@ mod tests_interaction {
         }
         assert_eq!(h.state().session.tools.foreground, [1.0; 4]);
         assert_eq!(h.state().ui.focused_window, None, "sampling must not select the docked canvas");
+        assert_eq!(crate::view_visibility::panel_window(h.state()), None);
         assert_eq!(h.state().view_composites.sampling_source.unwrap().0, other);
         let app = h.state_mut();
         crate::view_visibility::set_sampling_source(app, id, true);
@@ -705,6 +706,92 @@ mod tests_interaction {
         h.run_steps(3);
         assert!(h.state().ui.views[0].zoom > main);
         assert_eq!(h.state().ui.windows[0].view.zoom, child);
+    }
+
+    #[test]
+    fn docking_layers_selector_and_canvas_clicks_share_logical_focus() {
+        use crate::view_visibility::{panel_window, select_panel_window};
+
+        let (mut h, id) = harness(false);
+        let ctx = h.ctx.clone();
+        assert_eq!(focused(h.state()), Some(id));
+        select_panel_window(h.state_mut(), None);
+        assert_eq!(h.state().ui.focused_window, None);
+        assert_eq!(panel_window(h.state()), None);
+
+        let before = h.state().session.active().unwrap().history.past_len();
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.fill", json!({"color":"#ff0000"})).unwrap();
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), before + 1);
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), before);
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.redo", json!({})).unwrap();
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), before + 1);
+
+        select_panel_window(h.state_mut(), Some(id));
+        assert_eq!(focused(h.state()), Some(id));
+        assert_eq!(panel_window(h.state()), Some(id));
+        for command in ["edit.undo", "edit.redo", "edit.fill"] {
+            assert!(crate::menus::invoke(h.state_mut(), &ctx, command, json!({})).is_err(), "{command}");
+        }
+
+        let main = h.state().last_canvas_rect.center();
+        click(&mut h, main);
+        assert_eq!(h.state().ui.focused_window, None);
+        assert_eq!(panel_window(h.state()), None);
+        let secondary = h.state().docked_view.as_ref().unwrap().panes[0].rect.unwrap().center();
+        click(&mut h, secondary);
+        assert_eq!(focused(h.state()), Some(id));
+        assert_eq!(panel_window(h.state()), Some(id));
+    }
+
+    #[test]
+    fn docking_focus_main_canvas_menu_and_custom_shortcut_preserve_main_state() {
+        let (mut h, id) = harness(false);
+        let ctx = h.ctx.clone();
+        let command = "window.focusMainCanvas";
+        let items = crate::menus::menu_items(h.state());
+        let item = items.iter().find(|item| item.id == command).unwrap();
+        assert_eq!(item.path, ["View"]);
+        assert_eq!(item.label, "Focus Main Canvas");
+        assert_eq!(item.shortcut, None);
+        let binding = photocraft_engine::prefs::bindable_items().find(|item| item.0 == command).unwrap();
+        assert_eq!(binding.2, ["View"]);
+        assert_eq!(binding.3, None);
+        assert!(item.enabled);
+        assert!(crate::menus::invoke(h.state_mut(), &ctx, "edit.undo", json!({})).is_err());
+
+        let app = h.state_mut();
+        app.run("select.all", json!({})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        let before = app.session.active().unwrap().clone();
+        let view = app.ui.views[0].clone();
+        let mask = (app.ui.mask_target, app.ui.vector_mask_target);
+        assert!(mask.0);
+        for _ in 0..2 {
+            crate::menus::invoke(app, &ctx, command, json!({})).unwrap();
+            assert_eq!(crate::view_visibility::panel_window(app), None);
+            assert_eq!(app.ui.views[0], view);
+            let after = app.session.active().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&before.doc, &after.doc));
+            assert_eq!(before.active_layer, after.active_layer);
+            assert_eq!(before.history.past_len(), after.history.past_len());
+            assert_eq!(mask, (app.ui.mask_target, app.ui.vector_mask_target));
+        }
+        crate::view_visibility::select_panel_window(app, Some(id));
+        let modifiers = Modifiers { shift: true, ..Modifiers::NONE };
+        h.key_press_modifiers(modifiers, Key::F12);
+        h.run_steps(2);
+        assert_eq!(crate::view_visibility::panel_window(h.state()), Some(id));
+
+        h.state_mut().session.edit_prefs(|prefs| {
+            prefs.shortcuts.insert(command.into(), "Shift+F12".into());
+        });
+        h.key_press_modifiers(modifiers, Key::F12);
+        h.run_steps(2);
+        assert_eq!(crate::view_visibility::panel_window(h.state()), None);
+        assert!(std::sync::Arc::ptr_eq(&before.doc, &h.state().session.active().unwrap().doc));
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), before.history.past_len() - 1);
     }
 
     #[test]
