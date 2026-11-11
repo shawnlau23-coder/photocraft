@@ -350,8 +350,15 @@ fn rotated_view_keeps_engine_selection_in_document_space() {
     let b = st.doc.selection.as_ref().and_then(|s| photocraft_compose::bounds::content_bounds(s).into()).expect("selection");
     // Axis-aligned in the file: the outline is drawn rotated via ViewXform.
     assert!(b.width() >= 40 && b.height() >= 10, "{b:?}");
-    let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [100.0, 50.0], flip: false, flip_vertical: false, rotation: 30.0, aspect: 1.0 };
+    let xf = ViewXform {
+        rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)),
+        zoom: 1.0,
+        center: [100.0, 50.0],
+        flip: false,
+        flip_vertical: false,
+        rotation: 30.0,
+        aspect: 1.0,
+    };
     let a = xf.to_screen(10.0, 20.0);
     let c = xf.to_screen(50.0, 20.0);
     let v = c - a;

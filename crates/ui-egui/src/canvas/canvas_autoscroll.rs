@@ -185,7 +185,15 @@ mod tests {
         for rotation in [-90.0, 90.0] {
             for flip in [false, true] {
                 let mut v = View { zoom: 2.0, center: [300.0, 600.0], doc_size: [600, 1200], rotation, ..Default::default() };
-                let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 400.0)), zoom: 1.0, center: v.center, flip, flip_vertical: false, rotation, aspect: 2.0 };
+                let xf = ViewXform {
+                    rect: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 400.0)),
+                    zoom: 1.0,
+                    center: v.center,
+                    flip,
+                    flip_vertical: false,
+                    rotation,
+                    aspect: 2.0,
+                };
                 assert!(super::scroll(&mut v, vec2(0.0, 10_000.0), xf));
                 // At 2:1 pixel aspect the document's 600-pixel width is 1200 screen points
                 // tall after rotation. The 400-point viewport exposes 200 document pixels.
@@ -209,8 +217,15 @@ mod tests {
     fn oblique_rotation_keeps_a_vertical_scroll_vertical_and_a_fitting_axis_still() {
         for flip in [false, true] {
             let mut v = View { zoom: 1.0, center: [300.0, 300.0], doc_size: [600, 600], rotation: 45.0, ..Default::default() };
-            let xf =
-                ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(900.0, 400.0)), zoom: 1.0, center: v.center, flip, flip_vertical: false, rotation: v.rotation, aspect: 1.0 };
+            let xf = ViewXform {
+                rect: Rect::from_min_size(Pos2::ZERO, vec2(900.0, 400.0)),
+                zoom: 1.0,
+                center: v.center,
+                flip,
+                flip_vertical: false,
+                rotation: v.rotation,
+                aspect: 1.0,
+            };
             // A 600-pixel square at 45 degrees is about 849 points across: it fits horizontally
             // but is clipped vertically. Gating document axes would produce a diagonal drift.
             assert!(!super::scroll(&mut v, vec2(30.0, 0.0), xf));

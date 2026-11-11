@@ -1428,7 +1428,15 @@ fn clone_overlay_alpha(app: &PhotocraftApp, output: &mut egui::FullOutput) -> im
 }
 
 fn clone_overlay_view(side: f32, zoom: f32) -> ViewXform {
-    ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)), zoom, center: [32.0, 32.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 }
+    ViewXform {
+        rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)),
+        zoom,
+        center: [32.0, 32.0],
+        flip: false,
+        flip_vertical: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    }
 }
 
 #[test]
@@ -1772,8 +1780,15 @@ fn brush_tip_centre_follows_the_crosshair_preference_at_any_size() {
 #[test]
 fn view_transform_roundtrip() {
     for flip in [false, true] {
-        let xf =
-            ViewXform { rect: Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0)), zoom: 2.5, center: [320.0, 240.0], flip, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
+        let xf = ViewXform {
+            rect: Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0)),
+            zoom: 2.5,
+            center: [320.0, 240.0],
+            flip,
+            flip_vertical: false,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
         let s = xf.to_screen(10.0, 20.0);
         let d = xf.to_doc(s);
         assert!((d[0] - 10.0).abs() < 1e-3 && (d[1] - 20.0).abs() < 1e-3);

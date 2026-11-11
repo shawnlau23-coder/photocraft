@@ -42,7 +42,19 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
 /// Main-shell commands available even when a docked canvas is selected.
 pub(crate) fn main_shell_command(id: &str) -> bool {
     adjustment_creation_command(id)
-        || matches!(id, "window.focusMainCanvas" | "file.save" | "file.saveAs" | "file.saveACopy" | "file.close" | "file.closeAll" | "file.closeOthers" | "file.exit" | "window.arrange.newWindowForDocument" | "window.newWindowForDocument")
+        || matches!(
+            id,
+            "window.focusMainCanvas"
+                | "file.save"
+                | "file.saveAs"
+                | "file.saveACopy"
+                | "file.close"
+                | "file.closeAll"
+                | "file.closeOthers"
+                | "file.exit"
+                | "window.arrange.newWindowForDocument"
+                | "window.newWindowForDocument"
+        )
 }
 
 pub(crate) fn adjustment_creation_command(id: &str) -> bool {

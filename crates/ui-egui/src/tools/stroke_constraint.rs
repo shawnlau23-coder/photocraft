@@ -390,7 +390,15 @@ mod tests {
         let xf = {
             let st = h.state();
             let v = st.ui.views[st.session.active_index().unwrap()].clone();
-            crate::canvas::ViewXform { rect: st.last_canvas_rect, zoom: v.zoom, center: v.center, flip: false, flip_vertical: false, rotation: v.rotation, aspect: 1.0 }
+            crate::canvas::ViewXform {
+                rect: st.last_canvas_rect,
+                zoom: v.zoom,
+                center: v.center,
+                flip: false,
+                flip_vertical: false,
+                rotation: v.rotation,
+                aspect: 1.0,
+            }
         };
         let from = xf.to_screen(end[0] as f32, end[1] as f32);
         h.event(Event::PointerMoved(target));

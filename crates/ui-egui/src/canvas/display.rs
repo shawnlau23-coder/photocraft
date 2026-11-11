@@ -262,7 +262,12 @@ const DISPLAY_LUT: usize = 33;
 /// `doc`'s colour management: document → monitor profile and View › Proof Colors / Gamut
 /// Warning (the 32-bit preview is applied by the canvas shader, see [`hdr_preview`]). Returns the canvas `display` mode (0 none — the identity, e.g. sRGB on
 /// an sRGB monitor —, 1 LUT, 2 LUT + gamut warning, 3 matrix/shaper).
-pub(super) fn sync_display_lut(app: &mut PhotocraftApp, doc: &photocraft_doc::Document, key: impl Into<crate::gpu_canvas::CanvasTextureKey>, display: Option<u32>) -> u8 {
+pub(super) fn sync_display_lut(
+    app: &mut PhotocraftApp,
+    doc: &photocraft_doc::Document,
+    key: impl Into<crate::gpu_canvas::CanvasTextureKey>,
+    display: Option<u32>,
+) -> u8 {
     let Some(gpu) = app.gpu.clone() else { return 0 };
     let key = key.into();
     let output = display.unwrap_or(0);

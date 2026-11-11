@@ -276,8 +276,18 @@ mod tests {
         let viewport = ViewportId::from_hash_of(("docwin", 3_u64));
         let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
         let at = |zoom| view([400, 300], zoom);
-        let window =
-            DocWindow { id: 3, document: 0, view: at(1.0), open: true, position: None, floating: false, follow_main_flip: false, follow_main_settings: false, focused: false, visibility: Default::default() };
+        let window = DocWindow {
+            id: 3,
+            document: 0,
+            view: at(1.0),
+            open: true,
+            position: None,
+            floating: false,
+            follow_main_flip: false,
+            follow_main_settings: false,
+            focused: false,
+            visibility: Default::default(),
+        };
         let frame = |app: &PhotocraftApp, class, after: &View| follow(app, &ctx, class, viewport, &window, &mut after.clone(), rect);
         // Off by default, as in Photoshop.
         assert!(!app.session.prefs().general.zoom_resizes_windows);

@@ -48,7 +48,18 @@ pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize, f
     view.display_camera = None;
     view.fit_pending = offset > 0 || view.fit_pending;
     let visibility = app.session.documents().get(doc).map(|st| crate::view_visibility::Visibility::new(&st.doc)).unwrap_or_default();
-    app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, follow_main_flip: false, follow_main_settings: false, open: true, floating, focused: false, position: None, visibility });
+    app.ui.windows.push(crate::state::DocWindow {
+        id: wid,
+        document: doc,
+        view,
+        follow_main_flip: false,
+        follow_main_settings: false,
+        open: true,
+        floating,
+        focused: false,
+        position: None,
+        visibility,
+    });
     wid
 }
 

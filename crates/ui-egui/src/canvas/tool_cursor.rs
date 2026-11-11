@@ -179,7 +179,10 @@ pub(super) fn canvas_pointer_elsewhere(app: &crate::PhotocraftApp, ctx: &egui::C
     if !ctx.embed_viewports() && app.ui.windows.iter().any(|window| window.open) {
         others.push(egui::ViewportId::ROOT);
         others.extend(
-            app.ui.windows.iter().filter(|window| window.open && !super::docked_view::contains(app, window.id))
+            app.ui
+                .windows
+                .iter()
+                .filter(|window| window.open && !super::docked_view::contains(app, window.id))
                 .map(|window| egui::ViewportId::from_hash_of(("docwin", window.id))),
         );
     }
@@ -212,8 +215,8 @@ pub(crate) fn pointer_elsewhere(ctx: &egui::Context, others: &[egui::ViewportId]
     // may hear the pointer, stays this window's.
     let at = ctx.input(|i| i.viewport().inner_rect.zip(i.pointer.latest_pos()).map(|(r, p)| r.min + p.to_vec2()));
     let time = ctx.input(|i| i.time);
-    let there = separate
-        && others.iter().any(|&v| v != own && ctx.input_for(v, |i| arrived(i) && (!here || (i.time >= time && covers(i.viewport().inner_rect, at)))));
+    let there =
+        separate && others.iter().any(|&v| v != own && ctx.input_for(v, |i| arrived(i) && (!here || (i.time >= time && covers(i.viewport().inner_rect, at)))));
     let now = separate && elsewhere(before, here, there);
     if now != before {
         ctx.data_mut(|d| d.insert_temp(key, now));

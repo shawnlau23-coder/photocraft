@@ -566,8 +566,17 @@ fn secondary_document_input_rejects_edits_but_main_paints_and_undoes() {
     app.with_document_window(id, |app| {
         stroke(app);
         assert!(app.drag.is_none() && app.live_stroke.is_none());
-        for cmd in ["paint.stroke", "edit.fill", "edit.clear", "select.all", "layer.new.layer", "layer.layerMask.revealAll",
-                    "edit.freeTransform", "image.crop", "edit.undo"] {
+        for cmd in [
+            "paint.stroke",
+            "edit.fill",
+            "edit.clear",
+            "select.all",
+            "layer.new.layer",
+            "layer.layerMask.revealAll",
+            "edit.freeTransform",
+            "image.crop",
+            "edit.undo",
+        ] {
             assert!(app.run(cmd, json!({})).is_err(), "{cmd}");
             assert!(menus::invoke(app, &ctx, cmd, json!({})).is_err(), "{cmd}");
         }
@@ -575,7 +584,8 @@ fn secondary_document_input_rejects_edits_but_main_paints_and_undoes() {
         assert_eq!(menus::invoke(app, &ctx, "view.flipVertical", json!({})).unwrap(), json!(true));
         app.run("tools.setColors", json!({"foreground": [1.0, 0.0, 0.0, 1.0]})).unwrap();
         assert!(app.run("document.sampleColor", json!({"x":12.0, "y":12.0, "sampleLayer":"all"})).is_ok());
-    }).unwrap();
+    })
+    .unwrap();
     let after = app.session.active().unwrap();
     assert!(Arc::ptr_eq(&before.doc, &after.doc));
     assert_eq!(before.revision, after.revision);

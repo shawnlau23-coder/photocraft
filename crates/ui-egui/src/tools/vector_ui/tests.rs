@@ -869,8 +869,15 @@ fn pen_overlay_uses_the_view_document_even_during_direct_selection() {
     let owner = app.session.active().unwrap().doc.clone();
     app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
     let other = app.session.active().unwrap().doc.clone();
-    let xf =
-        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, flip_vertical: false, rotation: 0.0, aspect: 1.0 };
+    let xf = ViewXform {
+        rect: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)),
+        zoom: 1.0,
+        center: [100.0, 100.0],
+        flip: false,
+        flip_vertical: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
     let shapes = |app: &PhotocraftApp, doc: &Document, modifiers| {
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(egui::RawInput { events: vec![egui::Event::ModifiersChanged(modifiers)], ..Default::default() }, |ui| {

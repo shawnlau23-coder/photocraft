@@ -2634,8 +2634,15 @@ fn preview_pixels_past_the_canvas_are_hidden() {
     assert!(q[0][0] < -10.0 && q[2][1] > 74.0, "the box reaches past the canvas: {q:?}");
     let tol = 1e-3;
     for (rotation, flip) in [(0.0, false), (30.0, false), (-75.0, true)] {
-        let xf =
-            ViewXform { rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 400.0)), zoom: 2.0, center: [32.0, 32.0], flip, flip_vertical: false, rotation, aspect: 1.0 };
+        let xf = ViewXform {
+            rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 400.0)),
+            zoom: 2.0,
+            center: [32.0, 32.0],
+            flip,
+            flip_vertical: false,
+            rotation,
+            aspect: 1.0,
+        };
         let meshes = preview_meshes(&app, &xf);
         let verts: Vec<[f64; 2]> = meshes.iter().flat_map(|m| m.vertices.iter().map(|v| xf.to_doc(v.pos))).collect();
         assert!(!verts.is_empty(), "the preview still draws (rotation {rotation})");

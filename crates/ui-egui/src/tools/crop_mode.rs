@@ -336,7 +336,15 @@ pub fn offset_image(app: &mut PhotocraftApp, rect: [f64; 4], press: Option<Press
 /// A screen vector `s` (points, at the current zoom ignored) as a document vector of the same
 /// length: undoes the view's flip and rotation.
 pub fn screen_to_doc_vec(app: &PhotocraftApp, s: [f64; 2]) -> [f64; 2] {
-    let xf = ViewXform { rect: Rect::ZERO, zoom: 1.0, center: [0.0, 0.0], flip: app.canvas_flip_horizontal(), flip_vertical: app.canvas_flip_vertical(), rotation: view_rotation(app), aspect: 1.0 };
+    let xf = ViewXform {
+        rect: Rect::ZERO,
+        zoom: 1.0,
+        center: [0.0, 0.0],
+        flip: app.canvas_flip_horizontal(),
+        flip_vertical: app.canvas_flip_vertical(),
+        rotation: view_rotation(app),
+        aspect: 1.0,
+    };
     let u = xf.unmap_vec(vec2(s[0] as f32, s[1] as f32));
     [f64::from(u.x), f64::from(u.y)]
 }

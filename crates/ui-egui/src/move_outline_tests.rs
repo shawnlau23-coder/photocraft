@@ -49,7 +49,8 @@ fn app() -> (PhotocraftApp, LayerId, LayerId) {
         zoom_anchor: None,
         display_camera: None,
         zoom_transition: None,
-        flip_horizontal: false, flip_vertical: false,
+        flip_horizontal: false,
+        flip_vertical: false,
     }];
     (app, ids[0], ids[1])
 }

@@ -35,16 +35,15 @@ pub(crate) fn contains(app: &PhotocraftApp, id: u64) -> bool {
 
 fn visible(app: &PhotocraftApp) -> impl Iterator<Item = Pane> + '_ {
     let doc = super::main_canvas_document(app).filter(|doc| app.session.active_index() == Some(*doc) && app.jobs.focus.is_none());
-    app.docked_view.iter().flat_map(|group| group.panes.iter().copied()).filter(move |pane| {
-        app.ui.windows.iter().any(|w| w.id == pane.id && w.open && Some(w.document) == doc)
-    })
+    app.docked_view
+        .iter()
+        .flat_map(|group| group.panes.iter().copied())
+        .filter(move |pane| app.ui.windows.iter().any(|w| w.id == pane.id && w.open && Some(w.document) == doc))
 }
 
 pub(crate) fn pressed(app: &PhotocraftApp, ctx: &egui::Context) -> Option<u64> {
     let doc = app.session.active()?.doc.id;
-    visible(app)
-        .find(|pane| pane.rect.is_some() && super::canvas_pressed(ctx, doc, Some(pane.id)))
-        .map(|pane| pane.id)
+    visible(app).find(|pane| pane.rect.is_some() && super::canvas_pressed(ctx, doc, Some(pane.id))).map(|pane| pane.id)
 }
 
 #[cfg(test)]
@@ -58,12 +57,13 @@ pub(crate) fn focused(app: &PhotocraftApp) -> Option<u64> {
 }
 
 fn can_dock(app: &PhotocraftApp, w: &DocWindow) -> bool {
-    w.open && !w.floating && app.docked_view.as_ref().is_none_or(|group| {
-        group.contains(w.id)
-            || (group.panes.len() < 2 && group.panes.iter().all(|pane| {
-                app.ui.windows.iter().any(|other| other.id == pane.id && other.document == w.document && other.open)
-            }))
-    })
+    w.open
+        && !w.floating
+        && app.docked_view.as_ref().is_none_or(|group| {
+            group.contains(w.id)
+                || (group.panes.len() < 2
+                    && group.panes.iter().all(|pane| app.ui.windows.iter().any(|other| other.id == pane.id && other.document == w.document && other.open)))
+        })
 }
 
 pub(super) fn dock(app: &mut PhotocraftApp, ctx: &egui::Context, w: &DocWindow, side: Side) {
@@ -349,9 +349,7 @@ mod tests {
         assert_eq!(document, 1);
         let main = app.ui.views[document].clone();
         let doc = app.session.active().unwrap().doc.clone();
-        let create = |app: &mut PhotocraftApp| {
-            crate::menus::invoke(app, &ctx, COMMAND, json!({})).unwrap()["window"].as_u64().unwrap()
-        };
+        let create = |app: &mut PhotocraftApp| crate::menus::invoke(app, &ctx, COMMAND, json!({})).unwrap()["window"].as_u64().unwrap();
 
         assert_eq!(app.ui.focused_window, None);
         let first = create(&mut app);
@@ -464,11 +462,8 @@ mod tests_pane {
             assert!(axis.component(main_after.size()) < axis.component(main.size()), "{side:?}");
             assert_eq!(h.state().docked_view.as_ref().unwrap().inner, inner_before);
 
-            let inner_at = if axis == Axis::X {
-                egui::pos2(a.center().x, (a.bottom() + b.top()) / 2.0)
-            } else {
-                egui::pos2((a.right() + b.left()) / 2.0, a.center().y)
-            };
+            let inner_at =
+                if axis == Axis::X { egui::pos2(a.center().x, (a.bottom() + b.top()) / 2.0) } else { egui::pos2((a.right() + b.left()) / 2.0, a.center().y) };
             assert_eq!(hit(h.state(), inner_at), None);
             drag(&mut h, inner_at, if axis == Axis::X { egui::vec2(0.0, 24.0) } else { egui::vec2(24.0, 0.0) });
             assert_eq!(h.state().ui.focused_window, focus);
@@ -598,7 +593,12 @@ mod tests_interaction {
         app.ui.tool = crate::state::Tool::Brush;
         let xf = crate::canvas::view_xform::ViewXform {
             rect: Rect::from_min_max(pos2(0.0, 0.0), pos2(480.0, 320.0)),
-            zoom: 2.5, center: [48.0, 32.0], rotation: 37.0, flip: true, flip_vertical: true, aspect: 1.0,
+            zoom: 2.5,
+            center: [48.0, 32.0],
+            rotation: 37.0,
+            flip: true,
+            flip_vertical: true,
+            aspect: 1.0,
         };
         let [x, y] = xf.to_doc(xf.to_screen(12.5, 10.5));
         assert!((x - 12.5).abs() < 0.001 && (y - 10.5).abs() < 0.001);
@@ -661,7 +661,10 @@ mod tests_interaction {
         let app = h.state_mut();
         app.session.active_mut().unwrap().path = Some("/pics/docked.psd".into());
         app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"saved".to_vec(), Vec::new()))));
-        app.services.write = Some(Box::new(move |_: &str, _: &[u8]| { count.set(count.get() + 1); Ok(()) }));
+        app.services.write = Some(Box::new(move |_: &str, _: &[u8]| {
+            count.set(count.get() + 1);
+            Ok(())
+        }));
         crate::menus::invoke(app, &ctx, "file.close", json!({})).unwrap();
         h.run_steps(3);
         h.get_by_label("(Y)es").click();
@@ -840,7 +843,10 @@ mod tests_interaction {
         let app = h.state_mut();
         app.session.active_mut().unwrap().path = Some("/pics/docked.psd".into());
         app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"saved".to_vec(), Vec::new()))));
-        app.services.write = Some(Box::new(move |_: &str, _: &[u8]| { count.set(count.get() + 1); Ok(()) }));
+        app.services.write = Some(Box::new(move |_: &str, _: &[u8]| {
+            count.set(count.get() + 1);
+            Ok(())
+        }));
         app.with_document_window(id, |app| {
             assert!(crate::menus::invoke(app, &ctx, "file.save", json!({})).is_err());
             assert!(crate::menus::invoke(app, &ctx, "file.exit", json!({})).is_err());

@@ -23,12 +23,12 @@ pub mod workspace_ui;
 pub use bar::menu_bar;
 #[cfg(test)]
 use bar::pointer_reaches_title;
-pub use invoke::{apply_workspace, invoke};
-pub(crate) use invoke::{adjustment_creation_command, main_shell_command};
-pub(crate) use invoke::resume_discard;
-pub(crate) use invoke::panel_alias;
 #[cfg(test)]
 pub(crate) use invoke::invoke_unguarded;
+pub(crate) use invoke::panel_alias;
+pub(crate) use invoke::resume_discard;
+pub(crate) use invoke::{adjustment_creation_command, main_shell_command};
+pub use invoke::{apply_workspace, invoke};
 pub(crate) use items::ItemCache;
 pub use items::{MenuItem, is_live, menu_items};
 pub use render::alt_click;

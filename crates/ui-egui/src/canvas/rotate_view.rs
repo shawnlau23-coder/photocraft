@@ -237,7 +237,11 @@ pub fn overlay(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter
     let secondary = app.view_composites.rendering_window;
     let compass = secondary.map_or_else(compass_id, |window| compass_id().with(window));
     let keyboard_target = ctx.viewport_id() != egui::ViewportId::ROOT || crate::canvas::docked_view::focused(app) == secondary;
-    if keyboard_target && app.ui.tool == crate::state::Tool::RotateView && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) && view.rotation != 0.0 {
+    if keyboard_target
+        && app.ui.tool == crate::state::Tool::RotateView
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        && view.rotation != 0.0
+    {
         view.rotation = 0.0;
         ctx.data_mut(|d| d.remove::<RotateDrag>(drag_id));
     }
