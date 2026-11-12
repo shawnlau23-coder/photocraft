@@ -19,6 +19,16 @@ Each secondary view supports:
 
 Secondary views update as the document changes but remain display-only. All painting and editing take place on the main canvas.
 
+### Important: Flipping Independent Views
+
+To flip an Independent View horizontally or vertically, use the flip commands in the **View** menu or their assigned keyboard shortcuts.
+
+**Do not use the flip commands under Image → Rotation when you only want to mirror a view.** Those commands operate on the actual image rather than changing how it is displayed.
+
+The View menu's flip commands allow you to examine a mirrored version of your painting without changing the document itself.
+
+Each Independent View can be flipped separately, allowing you to compare the original and mirrored versions simultaneously.
+
 ### Why Independent Views?
 
 Artists frequently flip paintings, zoom out to inspect composition, hide layers, and experiment with adjustments to evaluate their work.
