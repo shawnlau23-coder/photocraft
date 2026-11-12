@@ -98,6 +98,22 @@ The release candidate is unsigned and intended for testing.
 
 **Downloads:** https://github.com/shawnlau23-coder/photocraft/releases
 
+### Windows Security Notice
+
+PhotoCraft with SGL Tools is an independently developed, unsigned application.
+
+When launching it for the first time, Windows may display a Microsoft Defender SmartScreen warning because the application does not yet have an established publisher reputation.
+
+If you downloaded it from the official GitHub release and trust the source, you can typically select **More info → Run anyway** to launch it.
+
+This warning does not necessarily indicate that the application is malicious.
+
+For additional verification, the Windows ZIP has the following SHA-256 checksum:
+
+`d2b32be1ced4417d6e70f461dea71e1ec3d3129d8ed1152c6e7af81c6834c523`
+
+Some Windows 11 systems with Smart App Control enabled may block unsigned applications without offering a Run anyway option.
+
 ## About the Project
 
 PhotoCraft with SGL Tools is an independent fork of the original open-source PhotoCraft application.
