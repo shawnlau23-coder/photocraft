@@ -1,3 +1,35 @@
+# PhotoCraft with SGL Tools
+
+PhotoCraft with SGL Tools is an independent fork of [PhotoCraft](https://github.com/storytold/photocraft) for drawing, painting, and evaluating artwork from several views of the same document.
+
+## Independent Views
+
+Choose **Window → Arrange → New Window** to create an Independent View of the current document. Paint and edit in Main, and use the secondary views as display-only references. Each secondary can have its own zoom, pan, rotation, horizontal and vertical flips, and layer visibility, opacity, blend modes, and adjustment parameters. These presentation settings are session-local.
+
+### Why Independent Views?
+
+Keep a close-up for drawing and a zoomed-out or mirrored view for checking proportions, values, and the overall composition. All views share the same artwork, so you can see Main's edits in context as you work.
+
+### Tracing and Drawing Evaluation
+
+Place a white layer above the reference and drawing layers and hide it in Main. In a secondary with **Independent Settings** enabled, show that white layer and set its opacity to about **25%**. The light overlay reduces contrast in the reference view while Main stays clear for drawing. Use the secondary's layer controls to compare your drawing with the reference, then toggle the overlay off for an unobstructed check.
+
+### Linked Cursor for Freehand Drawing
+
+Enable **Linked Cursor** in the **View** menu. The menu also contains its settings, and you can assign a toggle shortcut in **Edit → Keyboard Shortcuts**. The indicator shows the corresponding document location in the other views, even when their zoom or orientation differs. For freehand practice, match the apparent scale of two views and use the indicator to compare landmarks and distances as a sight-size-like learning aid.
+
+### Docking and Multiple Monitors
+
+Use the secondary's **Dock** menu to place up to two secondary views to the left, right, top, or bottom of Main. Drag the dividers to resize the panes. Choose **Float** to move a secondary into its own window, including onto another monitor.
+
+## Windows Portable Download
+
+Download the Windows x64 ZIP from the [SGL Tools pre-release](https://github.com/shawnlau23-coder/photocraft/releases/tag/sgl-v0.22.0-rc.1). Extract the entire archive to a writable folder and launch `photocraft.exe`. Keep `portable.txt` beside the executable to keep settings and recovery data in the adjacent `PhotoCraftData` folder. The release candidate is unsigned, so Windows may show a SmartScreen warning. The links and installation instructions in the original PhotoCraft documentation below refer to upstream builds.
+
+## Original PhotoCraft
+
+SGL Tools builds on PhotoCraft by the original developers and contributors. The original documentation, installation information, contributor credits, and MIT or Apache-2.0 licensing follow below.
+
 <p align="center">
   <a href="https://getartcraft.com/">
     <picture>
