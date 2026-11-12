@@ -122,6 +122,9 @@ impl PhotocraftApp {
                 if let Some(st) = self.session.active()
                     && !crate::canvas::secondary_sampling_click(self, ctx, st.doc.id, id)
                 {
+                    if self.ui.focused_window != Some(id) {
+                        crate::canvas::mark_secondary_activation(ctx, id);
+                    }
                     self.ui.focused_window = Some(id);
                 }
             } else if let Some((index, _)) = self

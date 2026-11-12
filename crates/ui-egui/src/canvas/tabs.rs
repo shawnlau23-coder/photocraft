@@ -813,13 +813,8 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 close = true;
             }
             focused = ui.ctx().input(|i| i.viewport().focused == Some(true));
-            if focused
-                && class != egui::ViewportClass::EmbeddedWindow
-                && (!w.focused || super::canvas_pressed(ui.ctx(), doc, Some(w.id)) && ui.input(|i| i.pointer.any_pressed()))
-                && !super::secondary_sampling_click(app, ui.ctx(), doc, w.id)
-            {
-                app.ui.focused_window = Some(w.id);
-                app.session.set_active(w.document);
+            if focused && class != egui::ViewportClass::EmbeddedWindow {
+                update_floating_view_focus(app, ui.ctx(), &w, doc);
             }
             egui::Panel::top(egui::Id::unique(("independent-flip", w.id))).resizable(false).show(ui, |ui| {
                 super::docked_view::controls(app, ui, &w, false);
@@ -828,6 +823,9 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                     let rect = ui.available_rect_before_wrap();
                     secondary_canvas(app, ui, &w, rect, Some((class, vid, focused)));
+                    if ui.ctx().viewport_id() != egui::ViewportId::ROOT {
+                        crate::notices::show_for_window(app, ui.ctx(), Some(w.id));
+                    }
                 });
             }
         });
@@ -846,6 +844,18 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         retain_gpu_documents(app);
     }
     crate::view_visibility::retain(app);
+}
+
+pub(crate) fn update_floating_view_focus(app: &mut PhotocraftApp, ctx: &egui::Context, w: &crate::state::DocWindow, doc: photocraft_doc::DocId) {
+    if (!w.focused || super::canvas_pressed(ctx, doc, Some(w.id)) && ctx.input(|i| i.pointer.any_pressed()))
+        && !super::secondary_sampling_click(app, ctx, doc, w.id)
+    {
+        if !w.focused || app.ui.focused_window != Some(w.id) {
+            super::mark_secondary_activation(ctx, w.id);
+        }
+        app.ui.focused_window = Some(w.id);
+        app.session.set_active(w.document);
+    }
 }
 
 pub(super) fn secondary_canvas(

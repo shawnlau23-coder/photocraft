@@ -306,8 +306,15 @@ mod tests {
         assert_eq!(focused(&app), Some(id));
         let before = app.session.active().unwrap().clone();
         let main = app.ui.views[0].clone();
-        assert!(crate::menus::invoke(&mut app, &ctx, "edit.fill", json!({"color":"#ff0000"})).is_err());
-        assert!(crate::menus::invoke(&mut app, &ctx, "select.all", json!({})).is_err());
+        for (command, params) in [("edit.fill", json!({"color":"#ff0000"})), ("select.all", json!({}))] {
+            assert!(crate::menus::invoke(&mut app, &ctx, command, params.clone()).is_err());
+            assert!(app.ui.notices.iter().any(|notice| notice.title == crate::notices::SECONDARY_EDIT_TITLE), "{command}");
+            app.ui.notices.clear();
+            app.automation_input = true;
+            assert!(crate::menus::invoke(&mut app, &ctx, command, params).is_err());
+            assert!(app.ui.notices.is_empty(), "{command}");
+            app.automation_input = false;
+        }
 
         let press = |key, modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         let mods = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
@@ -315,6 +322,7 @@ mod tests {
         input.viewports.insert(ViewportId::ROOT, ViewportInfo { focused: Some(true), ..Default::default() });
         let mut output = ctx.run_ui(input, |ui| crate::shortcuts::handle(&mut app, ui.ctx()));
         output.textures_delta.clear();
+        assert_eq!(app.ui.notices.iter().filter(|notice| notice.title == crate::notices::SECONDARY_EDIT_TITLE).count(), 1);
         assert!(app.ui.windows[0].view.zoom > window.view.zoom);
         assert_eq!(app.ui.views[0], main);
         assert_eq!(crate::menus::invoke(&mut app, &ctx, "view.flipVertical", json!({})).unwrap(), json!(true));
@@ -557,6 +565,52 @@ mod tests_interaction {
     }
 
     #[test]
+    fn docked_editing_press_notifies_once_without_editing() {
+        let (mut h, id) = harness(false);
+        h.state_mut().ui.focused_window = None;
+        h.state_mut().ui.tool = crate::Tool::Brush;
+        let before = h.state().session.active().unwrap().clone();
+        let p = h.state().docked_view.as_ref().unwrap().panes[0].rect.unwrap().center();
+        click(&mut h, p);
+        assert_eq!(focused(h.state()), Some(id));
+        assert!(h.state().ui.notices.iter().all(|n| n.title != crate::notices::SECONDARY_EDIT_TITLE));
+        h.event(Event::PointerMoved(p));
+        h.step();
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        let notice = h.state().ui.notices.iter().find(|n| n.title == crate::notices::SECONDARY_EDIT_TITLE).unwrap().id;
+        let end = p + vec2(12.0, 3.0);
+        h.event(Event::PointerMoved(end));
+        h.run_steps(3);
+        h.event(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+        let notices: Vec<_> = h.state().ui.notices.iter().filter(|n| n.title == crate::notices::SECONDARY_EDIT_TITLE).map(|n| n.id).collect();
+        assert_eq!(notices, [notice]);
+        let after = h.state().session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&after.doc, &before.doc));
+        assert_eq!(after.history.past_len(), before.history.past_len());
+        assert_eq!(after.is_dirty(), before.is_dirty());
+
+        h.state_mut().ui.notices.clear();
+        let main = h.state().last_canvas_rect.center();
+        click(&mut h, main);
+        assert!(h.state().session.active().unwrap().history.past_len() > before.history.past_len());
+        assert!(h.state().ui.notices.iter().all(|n| n.title != crate::notices::SECONDARY_EDIT_TITLE));
+    }
+
+    #[test]
+    fn docked_navigation_does_not_post_an_edit_notice() {
+        let (mut h, _) = harness(false);
+        h.state_mut().ui.focused_window = None;
+        let p = h.state().docked_view.as_ref().unwrap().panes[0].rect.unwrap().center();
+        for tool in [crate::Tool::Hand, crate::Tool::Zoom, crate::Tool::RotateView, crate::Tool::Eyedropper] {
+            h.state_mut().ui.tool = tool;
+            click(&mut h, p);
+            assert!(h.state().ui.notices.iter().all(|n| n.title != crate::notices::SECONDARY_EDIT_TITLE), "{tool:?}");
+        }
+    }
+
+    #[test]
     fn docking_alt_click_samples_the_secondary_composite_and_keeps_document_read_only() {
         let (mut h, id) = harness(false);
         let ctx = h.ctx.clone();
@@ -581,6 +635,7 @@ mod tests_interaction {
             h.step();
         }
         assert_eq!(h.state().session.tools.foreground, [1.0; 4]);
+        assert!(h.state().ui.notices.iter().all(|n| n.title != crate::notices::SECONDARY_EDIT_TITLE));
         assert_eq!(h.state().ui.focused_window, None, "sampling must not select the docked canvas");
         assert_eq!(crate::view_visibility::panel_window(h.state()), None);
         assert_eq!(h.state().view_composites.sampling_source.unwrap().0, other);
