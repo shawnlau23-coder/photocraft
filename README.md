@@ -1,34 +1,112 @@
 # PhotoCraft with SGL Tools
 
-PhotoCraft with SGL Tools is an independent fork of [PhotoCraft](https://github.com/storytold/photocraft) for drawing, painting, and evaluating artwork from several views of the same document.
+**PhotoCraft with SGL Tools** is a fork of the open-source PhotoCraft digital painting and image editing application, enhanced with tools for drawing, painting, tracing, and evaluating artwork.
+
+Its central feature is the ability to display multiple views of the same document, each with independently controlled viewing and layer settings.
+
+To create an Independent View, select **Window → Arrange → New Window**. Additional views can be docked alongside the main canvas or moved to another monitor as floating windows.
 
 ## Independent Views
 
-Choose **Window → Arrange → New Window** to create an Independent View of the current document. Paint and edit in Main, and use the secondary views as display-only references. Each secondary can have its own zoom, pan, rotation, horizontal and vertical flips, and layer visibility, opacity, blend modes, and adjustment parameters. These presentation settings are session-local.
+Each secondary view supports:
+
+- **Independent zoom, pan, and rotation** — Examine different areas or view the entire composition without changing the main canvas.
+- **Horizontal and vertical flipping** — View a mirrored version of the painting to help identify drawing and composition problems.
+- **Independent layer visibility and opacity** — Display different combinations of layers and opacity settings in each view.
+- **Independent blending and adjustment settings** — Examine alternative color and tonal interpretations of the same artwork.
+- **Linked cursor** — Identify corresponding locations between views, even when they have different zoom levels or orientations.
+- **Color sampling** — Sample colors from secondary views or designate a secondary view as the color sampling source for the main canvas.
+
+Secondary views update as the document changes but remain display-only. All painting and editing take place on the main canvas.
 
 ### Why Independent Views?
 
-Keep a close-up for drawing and a zoomed-out or mirrored view for checking proportions, values, and the overall composition. All views share the same artwork, so you can see Main's edits in context as you work.
+Artists frequently flip paintings, zoom out to inspect composition, hide layers, and experiment with adjustments to evaluate their work.
+
+PhotoCraft with SGL Tools allows these different views to remain available simultaneously.
+
+For example, an artist can paint on the main canvas while viewing a horizontally flipped version on another monitor, examining the composition at a smaller scale, or comparing alternative color and value adjustments.
+
+All without repeatedly changing the main working view.
 
 ### Tracing and Drawing Evaluation
 
-Place a white layer above the reference and drawing layers and hide it in Main. In a secondary with **Independent Settings** enabled, show that white layer and set its opacity to about **25%**. The light overlay reduces contrast in the reference view while Main stays clear for drawing. Use the secondary's layer controls to compare your drawing with the reference, then toggle the overlay off for an unobstructed check.
+Independent Views provide a particularly useful workspace for tracing and refining drawings.
+
+For example, an artist can arrange three layers in the document:
+
+1. **Reference image** — The original photograph or image on the bottom layer.
+2. **White layer** — A white layer above the reference, set to approximately **25% opacity**.
+3. **Drawing layer** — A transparent layer on top, where the artist traces or draws.
+
+In the main canvas, the reference remains visible through the partially transparent white layer, providing a subdued guide for drawing.
+
+Meanwhile, an independent view with **Independent Settings** enabled can display the same document with the white layer set to **100% opacity**. This hides the reference image beneath it, allowing the artist to see the drawing clearly against a white background as it develops.
+
+The artist can continue tracing in the main canvas while simultaneously evaluating the drawing without the visual interference of the reference.
+
+A second independent view, or the same view when desired, can be **horizontally mirrored** to reveal proportion, alignment, and symmetry problems that might otherwise go unnoticed.
+
+Because secondary views have independent display settings, none of these changes interfere with the main canvas or its working layers.
+
+This approach combines the convenience of tracing with the visual evaluation normally associated with freehand drawing.
 
 ### Linked Cursor for Freehand Drawing
 
-Enable **Linked Cursor** in the **View** menu. The menu also contains its settings, and you can assign a toggle shortcut in **Edit → Keyboard Shortcuts**. The indicator shows the corresponding document location in the other views, even when their zoom or orientation differs. For freehand practice, match the apparent scale of two views and use the indicator to compare landmarks and distances as a sight-size-like learning aid.
+The linked cursor provides a valuable drawing aid, particularly for artists learning to draw freehand.
+
+As the cursor moves over the main canvas, its corresponding position appears in a secondary view, even when the views have different zoom levels, positions, or orientations.
+
+The linked cursor and its settings are available through the **View** menu. The cursor can also be turned on and off using a user-assigned keyboard shortcut configured through **Edit → Keyboard Shortcuts**.
+
+This allows artists to check their accuracy instantly without interrupting their drawing process.
+
+The technique provides a method somewhat similar to traditional **sight-size drawing**, but with the convenience of digital tools.
+
+For example, when drawing a portrait, an artist can first estimate the placement of the eyes, nose, mouth, and other important landmarks by eye. Then, with a quick keystroke, the linked cursor can be enabled to compare corresponding positions and check the accuracy of those estimates.
+
+The artist can turn the linked cursor off again and continue drawing freehand, using it periodically to check proportions, alignment, and spatial relationships.
+
+Rather than relying on tracing or constantly measuring, artists can use the linked cursor as a learning aid to develop their observational drawing skills.
+
+Combined with independent zoom, flipping, and layer controls, this provides a flexible environment for practicing and evaluating freehand drawing.
 
 ### Docking and Multiple Monitors
 
-Use the secondary's **Dock** menu to place up to two secondary views to the left, right, top, or bottom of Main. Drag the dividers to resize the panes. Choose **Float** to move a secondary into its own window, including onto another monitor.
+Independent Views can be arranged to suit different workspace configurations.
 
-## Windows Portable Download
+Secondary views can be:
 
-Download the Windows x64 ZIP from the [SGL Tools pre-release](https://github.com/shawnlau23-coder/photocraft/releases/tag/sgl-v0.22.0-rc.1). Extract the entire archive to a writable folder and launch `photocraft.exe`. Keep `portable.txt` beside the executable to keep settings and recovery data in the adjacent `PhotoCraftData` folder. The release candidate is unsigned, so Windows may show a SmartScreen warning. The links and installation instructions in the original PhotoCraft documentation below refer to upstream builds.
+- Displayed in floating windows and moved to additional monitors.
+- Docked to the left, right, top, or bottom of the main canvas using the secondary view's **Dock** menu.
+- Resized using adjustable splitters.
+- Returned to floating windows using **Float**.
 
-## Original PhotoCraft
+Up to two secondary views can be docked alongside the main canvas.
 
-SGL Tools builds on PhotoCraft by the original developers and contributors. The original documentation, installation information, contributor credits, and MIT or Apache-2.0 licensing follow below.
+An artist might dedicate one monitor to painting, another to a mirrored view, and a third to an overall composition or alternative color study.
+
+## Downloading PhotoCraft with SGL Tools
+
+The first release candidate is **v0.22.0-rc.1 for Windows x64**.
+
+Download the portable ZIP from the GitHub Releases page, extract the complete archive into a folder, and run the included PhotoCraft executable.
+
+No installation or Rust development environment is required.
+
+The release candidate is unsigned and intended for testing.
+
+**Downloads:** https://github.com/shawnlau23-coder/photocraft/releases
+
+## About the Project
+
+PhotoCraft with SGL Tools is an independent fork of the original open-source PhotoCraft application.
+
+The SGL additions focus on improving the artist's ability to observe, compare, and evaluate artwork while drawing and painting.
+
+The original PhotoCraft developers and contributors retain credit for their work. Applicable licenses and attribution are preserved.
+
+**Original PhotoCraft project:** https://github.com/storytold/photocraft
 
 <p align="center">
   <a href="https://getartcraft.com/">
