@@ -36,6 +36,15 @@ fn pixel(doc: &Document) -> [f32; 4] {
     photocraft_compose::render(doc, photocraft_geom::Rect::new(0, 0, 1, 1)).px[0]
 }
 
+fn assert_hidden_adjustment_export(before: &Document, after: &Document, layer: LayerId) {
+    let opts = photocraft_io::ExportOptions::default();
+    let png = |doc: &Document| photocraft_io::export(doc, "png", &opts).unwrap().bytes;
+    assert_eq!(png(before), png(after));
+    let native = photocraft_io::export(after, "pcraft", &opts).unwrap().bytes;
+    let saved = photocraft_io::import("sample.pcraft", &native).unwrap().document;
+    assert!(!saved.layer(layer).unwrap().visible);
+}
+
 #[test]
 fn adjustment_creation_from_canvas_focus_preserves_main_and_restores_secondary_visibility() {
     let (mut app, ctx, red, blue) = fixture();
@@ -75,12 +84,7 @@ fn adjustment_creation_from_canvas_focus_preserves_main_and_restores_secondary_v
     assert!(!shown(&mut app, b).layer(layer).unwrap().visible);
     assert!(!shown(&mut app, c).layer(layer).unwrap().visible);
 
-    let opts = photocraft_io::ExportOptions::default();
-    let png = |doc: &Document| photocraft_io::export(doc, "png", &opts).unwrap().bytes;
-    assert_eq!(png(&working.doc), png(&app.session.active().unwrap().doc));
-    let native = photocraft_io::export(&app.session.active().unwrap().doc, "pcraft", &opts).unwrap().bytes;
-    let saved = photocraft_io::import("sample.pcraft", &native).unwrap().document;
-    assert!(!saved.layer(layer).unwrap().visible);
+    assert_hidden_adjustment_export(&working.doc, &app.session.active().unwrap().doc, layer);
 
     app.ui.focused_window = None;
     menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();

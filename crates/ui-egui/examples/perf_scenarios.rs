@@ -274,15 +274,12 @@ impl Bench {
         Ok(cmd_ms + refresh_ms)
     }
 
-    /// Frees the canvas's textures and compositor pages of documents not in `live`, as the app
-    /// does when a document closes (`GpuCanvas::retain`).
-    fn retain(&self, live: &[u64]) {
+    /// Close the previous benchmark document outside the measured interval.
+    fn clear_document_caches(&self) {
         if let Some((g, _)) = &self.gpu {
-            g.retain(live);
+            g.clear_benchmark_document_caches();
         }
-        if self.shown.get().is_some_and(|(id, _)| !live.contains(&id)) {
-            self.shown.set(None);
-        }
+        self.shown.set(None);
     }
 
     fn gpu_bytes(&self, s: &Session) -> Option<u64> {
@@ -1078,14 +1075,14 @@ fn job_scenarios(b: &mut Bench, sz: &Sizes) {
                     // import has a new id, so its pages would otherwise stay resident): its
                     // teardown isn't decode.
                     drop(std::mem::replace(s, Session::new()));
-                    b.retain(&[]);
+                    b.clear_document_caches();
                     let t = Instant::now();
                     let d = photocraft_io::import("layered.psd", &psd).map_err(|e| e.to_string())?.document;
                     s.open_document(d, Some("layered.psd".into()));
                     b.after_cmd(s, t, true)
                 });
                 drop(holder);
-                b.retain(&[]);
+                b.clear_document_caches();
             }
             Err(e) => b.errors.push((open.into(), e)),
         }

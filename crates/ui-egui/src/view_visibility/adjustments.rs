@@ -1,5 +1,11 @@
 //! Typed, immutable view settings and one explicitly targeted Properties editing session.
-use super::*;
+use std::{collections::BTreeMap, sync::Arc};
+
+use photocraft_doc::{DocId, Document, LayerId};
+use serde_json::{Value, json};
+
+use super::{Visibility, focused_window, initialize, settings_read_only};
+use crate::PhotocraftApp;
 use photocraft_doc::{Adjustment, ColorMode, LayerContent};
 use photocraft_engine::adjust_params;
 

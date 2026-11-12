@@ -354,6 +354,21 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
     ants
 }
 
+fn canvas_gpu_eligible(app: &mut PhotocraftApp, rotation: f32, input: &CanvasPaintInput<'_>, secondary: Option<u64>) -> bool {
+    // Native secondary reflection is a presentation uniform. Main keeps its legacy
+    // flip path, and non-square pixels still use the CPU canvas.
+    let gpu_host = secondary.is_none() || input.ctx.viewport_id() != egui::ViewportId::ROOT || secondary.is_some_and(|id| docked_view::contains(app, id));
+    let gpu_ok = gpu_host && crate::gpu_canvas::gpu_view_ok((input.flip || input.flip_vertical) && secondary.is_none(), rotation, input.aspect);
+    if secondary.is_none() && app.gpu.is_some() {
+        if gpu_ok {
+            crate::render_path::view_ok(app, input.doc.id.0);
+        } else {
+            crate::render_path::view_cpu(app, input.doc.id.0);
+        }
+    }
+    gpu_ok
+}
+
 /// Paints the document, and returns whether the pixels past the canvas show, the Layer Edges slot,
 /// the canvas edge on screen, and the selection's ants still to be painted ([`paint_selection_outline`]).
 fn paint_canvas(
@@ -375,7 +390,6 @@ fn paint_canvas(
     let primary = input.primary;
     let flip = input.flip;
     let flip_vertical = input.flip_vertical;
-    let aspect = input.aspect;
     let render_zoom = input.render_zoom;
     let target_xf = input.target_xf;
     let pixel_grid = input.pixel_grid;
@@ -403,18 +417,8 @@ fn paint_canvas(
     // Live adjustment previews on big documents use a downsampled proxy (see proxy.rs), unless
     // Preferences › Performance › Low Resolution Previews is off.
     let mut on_gpu = false;
-    // Native secondary reflection is a presentation uniform. Main keeps its legacy
-    // flip path, and non-square pixels still use the CPU canvas.
     let secondary = app.view_composites.rendering_window;
-    let gpu_host = secondary.is_none() || ctx.viewport_id() != egui::ViewportId::ROOT || secondary.is_some_and(|id| docked_view::contains(app, id));
-    let gpu_ok = gpu_host && crate::gpu_canvas::gpu_view_ok((flip || flip_vertical) && secondary.is_none(), view.rotation, aspect);
-    if secondary.is_none() && app.gpu.is_some() {
-        if gpu_ok {
-            crate::render_path::view_ok(app, doc.id.0);
-        } else {
-            crate::render_path::view_cpu(app, doc.id.0);
-        }
-    }
+    let gpu_ok = canvas_gpu_eligible(app, view.rotation, input, secondary);
     let gpu_preview = if secondary.is_none() && app.gpu.is_some() && gpu_ok {
         ensure_adjust_proxy(app, idx, render_zoom).or_else(|| ensure_filter_preview(app, idx, ctx)).or_else(|| ensure_proxy_preview(app, idx, render_zoom))
     } else {
@@ -1980,8 +1984,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
             ui,
             rect,
             view,
-            flip,
-            flip_vertical,
+            [flip, flip_vertical],
             aspect,
             app.session.prefs().tools.overscroll,
             egui::Id::unique(("pc-canvas", idx, app.view_composites.rendering_window)),
@@ -2098,6 +2101,57 @@ pub(crate) fn canvas_widget_id(doc: photocraft_doc::DocId, secondary: Option<u64
 pub(crate) fn canvas_pressed(ctx: &egui::Context, doc: photocraft_doc::DocId, secondary: Option<u64>) -> bool {
     ctx.read_response(canvas_widget_id(doc, secondary))
         .is_some_and(|response| response.enabled() && (response.is_pointer_button_down_on() || response.clicked()))
+}
+
+fn main_canvas_temporary_tool(app: &mut PhotocraftApp, ui: &egui::Ui, primary: bool) -> Option<crate::hold_keys::Temporary> {
+    let ctx = ui.ctx();
+    // Pen pressure/tilt for this frame's tool events (mouse = 1.0), unless Preferences › Tools ›
+    // Use Tablet Pressure is off; the pen's eraser end selects the Eraser.
+    app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
+    let curve = app.session.prefs().tools.pressure_curve.clone();
+    app.stylus.set_pressure_curve(&curve);
+    app.stylus.update_for_frame(ui.ctx().cumulative_frame_nr(), &ui.input(|i| i.events.clone()));
+    crate::stylus::Stylus::sync_eraser_tool(app);
+    // A Magnetic Lasso border left behind by a tool or document switch is dropped.
+    crate::magnetic_lasso_ui::frame(app, ui.input(|i| i.pointer.primary_down()), primary);
+    // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
+    crate::layer_picker::prune(app);
+    // Held keys (hold_keys.rs): Space repositions a crop frame, marquee, lasso or shape being
+    // drawn; otherwise Space is the Hand and ⌘Space / ⌥Space the Zoom tool while held.
+    let reposition = crate::hold_keys::reposition_held(app, ctx);
+    crate::crop_ui::set_space(app, reposition);
+    // ⌘ (Ctrl) held: a temporary Straighten with the Crop tool.
+    crate::crop_straighten::set_held(app, !ctx.text_edit_focused() && ui.input(|i| i.modifiers.command));
+    // A tab switched this frame drops the other document's pending crop (#1918).
+    crate::crop_ui::cancel_stale(app);
+    // A tool picked mid-drag ends the crop gesture before the frame sees the switch, which would
+    // otherwise drop the untouched default frame under the box being drawn (#9223). The Hand and
+    // Zoom never reach `tool_event`, so this is the one place that sees every tool.
+    crate::crop_ui::end_drag_on_leave(app);
+    crate::crop_ui::ensure_frame(app);
+    let mut drawing = crate::crop_ui::active(app);
+    if let Some(pen) = app.ui.pen.as_mut().filter(|pen| pen.dragging && !pen.curvature) {
+        pen.reposition = reposition;
+        drawing = true;
+    }
+    if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
+        d.reposition = reposition;
+        drawing = true;
+    }
+    crate::hold_keys::for_frame(app, ctx, drawing || crate::type_transform::active(app))
+}
+
+fn sync_crop_camera(ctx: &egui::Context, view: &mut View, camera: Option<([f32; 2], f32)>, current: Option<&View>) {
+    if let (Some((center, rotation)), Some(now)) = (camera, current) {
+        if now.center != center {
+            view.center = now.center;
+            ctx.request_repaint();
+        }
+        if now.rotation != rotation {
+            view.rotation = now.rotation;
+            ctx.request_repaint();
+        }
+    }
 }
 
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
@@ -2230,44 +2284,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let bars_id = egui::Id::unique(("pc-canvas-bars-hover", idx, app.view_composites.rendering_window));
     update_canvas_navigation(app, &mut view, CanvasNavigationInput { ctx: &ctx, response: &response, free_hover, wheel_owner, xf, ppp, idx });
 
-    let temporary = if secondary {
-        crate::hold_keys::for_frame(app, &ctx, false)
-    } else {
-        // Pen pressure/tilt for this frame's tool events (mouse = 1.0), unless Preferences › Tools ›
-        // Use Tablet Pressure is off; the pen's eraser end selects the Eraser.
-        app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
-        let curve = app.session.prefs().tools.pressure_curve.clone();
-        app.stylus.set_pressure_curve(&curve);
-        app.stylus.update_for_frame(ui.ctx().cumulative_frame_nr(), &ui.input(|i| i.events.clone()));
-        crate::stylus::Stylus::sync_eraser_tool(app);
-        // A Magnetic Lasso border left behind by a tool or document switch is dropped.
-        crate::magnetic_lasso_ui::frame(app, ui.input(|i| i.pointer.primary_down()), primary);
-        // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
-        crate::layer_picker::prune(app);
-        // Held keys (hold_keys.rs): Space repositions a crop frame, marquee, lasso or shape being
-        // drawn; otherwise Space is the Hand and ⌘Space / ⌥Space the Zoom tool while held.
-        let reposition = crate::hold_keys::reposition_held(app, &ctx);
-        crate::crop_ui::set_space(app, reposition);
-        // ⌘ (Ctrl) held: a temporary Straighten with the Crop tool.
-        crate::crop_straighten::set_held(app, !ctx.text_edit_focused() && ui.input(|i| i.modifiers.command));
-        // A tab switched this frame drops the other document's pending crop (#1918).
-        crate::crop_ui::cancel_stale(app);
-        // A tool picked mid-drag ends the crop gesture before the frame sees the switch, which would
-        // otherwise drop the untouched default frame under the box being drawn (#9223). The Hand and
-        // Zoom never reach `tool_event`, so this is the one place that sees every tool.
-        crate::crop_ui::end_drag_on_leave(app);
-        crate::crop_ui::ensure_frame(app);
-        let mut drawing = crate::crop_ui::active(app);
-        if let Some(pen) = app.ui.pen.as_mut().filter(|pen| pen.dragging && !pen.curvature) {
-            pen.reposition = reposition;
-            drawing = true;
-        }
-        if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
-            d.reposition = reposition;
-            drawing = true;
-        }
-        crate::hold_keys::for_frame(app, &ctx, drawing || crate::type_transform::active(app))
-    };
+    let temporary = if secondary { crate::hold_keys::for_frame(app, &ctx, false) } else { main_canvas_temporary_tool(app, ui, primary) };
     let space_pan = temporary == Some(crate::hold_keys::Temporary::Hand);
     let middle = ui.input(|i| i.pointer.middle_down());
     let tool = match temporary {
@@ -2413,15 +2430,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             handle_secondary_canvas_input(app, ui, &mut view, &input);
         }
     }
-    if crop_camera && let (Some((center, rotation)), Some(now)) = (camera, app.ui.views.get(idx)) {
-        if now.center != center {
-            view.center = now.center;
-            ctx.request_repaint();
-        }
-        if now.rotation != rotation {
-            view.rotation = now.rotation;
-            ctx.request_repaint();
-        }
+    if crop_camera {
+        sync_crop_camera(&ctx, &mut view, camera, app.ui.views.get(idx));
     }
     let xf = if paint_after_input {
         // This frame's navigation input (wheel pan, pinch zoom) shows in this frame too.

@@ -49,6 +49,8 @@ impl PhotocraftMcp {
 /// Where a waited call reports progress and learns that it was cancelled. Without a request
 /// (a direct call in a test) nothing is reported and nothing cancels.
 pub(super) struct Waiter {
+    #[cfg(test)]
+    pub(super) headless_job_polled: Option<tokio::sync::oneshot::Sender<()>>,
     context: Option<RequestContext<RoleServer>>,
     last: Option<f64>,
     sent_at: Option<Instant>,
@@ -56,7 +58,13 @@ pub(super) struct Waiter {
 
 impl Waiter {
     pub(super) fn new(context: Option<RequestContext<RoleServer>>) -> Self {
-        Waiter { context, last: None, sent_at: None }
+        Waiter {
+            #[cfg(test)]
+            headless_job_polled: None,
+            context,
+            last: None,
+            sent_at: None,
+        }
     }
 
     pub(super) fn is_cancelled(&self) -> bool {
@@ -127,6 +135,15 @@ impl PhotocraftMcp {
     /// `waiter` as `step.0 + fraction` of `step.1`, and cancelling the request cancels the job,
     /// leaving the document unchanged. `None` in bridge mode.
     pub(super) async fn headless_wait(&self, id: String, params: Value, waiter: &mut Waiter, step: (usize, usize)) -> Option<Result<Value, AutomationError>> {
+        self.headless_wait_with(move |h| h.command_begin(&id, params), waiter, step).await
+    }
+
+    pub(super) async fn headless_wait_with(
+        &self,
+        start: impl FnOnce(&mut crate::headless::Headless) -> Result<Started, AutomationError> + Send + 'static,
+        waiter: &mut Waiter,
+        step: (usize, usize),
+    ) -> Option<Result<Value, AutomationError>> {
         if !matches!(&*self.backend, Backend::Headless(_)) {
             return None;
         }
@@ -139,7 +156,7 @@ impl PhotocraftMcp {
                 if cancel.as_ref().is_some_and(|token| token.is_cancelled()) {
                     return Err(photocraft_engine::EngineError::Cancelled.into());
                 }
-                Ok(match h.command_begin(&id, params)? {
+                Ok(match start(h)? {
                     Started::Job(job) if cancel.as_ref().is_some_and(|token| token.is_cancelled()) => {
                         return h.job_abandon(job).map(Err);
                     }
@@ -159,6 +176,10 @@ impl PhotocraftMcp {
             match self.headless_op(move |h| Ok(h.job_poll(job))).await? {
                 Ok(JobPoll::Running(fraction, message)) => {
                     let fraction = if fraction.is_finite() { f64::from(fraction.clamp(0.0, 1.0)) } else { 0.0 };
+                    #[cfg(test)]
+                    if let Some(polled) = waiter.headless_job_polled.take() {
+                        let _ = polled.send(());
+                    }
                     waiter.report(step.0 as f64 + fraction, step.1 as f64, &message).await;
                 }
                 Ok(JobPoll::Ended(result)) => {

@@ -163,12 +163,13 @@ pub fn bar_rects(rect: Rect, horizontal: bool, vertical: bool) -> (Option<Rect>,
 }
 
 /// Show the scrollbars of the canvas `rect` and apply their drags and page clicks to `view`.
-/// `flip` is View › Flip Horizontal (the bar then runs the other way through the image);
+/// `flips` reverses each scrollbar along the corresponding reflected axis;
 /// `aspect` is the displayed pixel aspect ratio (a document pixel is that many points wider per
 /// point of height); `overscroll` is Preferences › Tools › Overscroll.
 /// Returns true when the pointer is over a bar (the canvas then leaves the pointer alone).
-pub fn show(ui: &Ui, rect: Rect, view: &mut View, flip: bool, flip_vertical: bool, aspect: f32, overscroll: bool, key: Id) -> bool {
+pub fn show(ui: &Ui, rect: Rect, view: &mut View, flips: [bool; 2], aspect: f32, overscroll: bool, key: Id) -> bool {
     let [w, h] = view.doc_size;
+    let [flip, flip_vertical] = flips;
     // `Span` works in egui points; `View::zoom` is device pixels per document pixel.
     let ppp = ui.ctx().pixels_per_point();
     let zoom = view.zoom / if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };

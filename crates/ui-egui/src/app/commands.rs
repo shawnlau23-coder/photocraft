@@ -3,6 +3,14 @@ use super::{
     smart_svg_ui, state, transform_tool, type_transform, vector_ui,
 };
 
+struct CommandSideEffects {
+    creates_active_mask: bool,
+    creates_active_vector_mask: bool,
+    creates_adjustment_or_fill: bool,
+    preserve_target: bool,
+    path_mask: bool,
+}
+
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -187,7 +195,11 @@ impl PhotocraftApp {
             jobs_ui::run(self, id, params)
         };
         let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
-        self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, preserve_target, path_mask);
+        self.sync_command_side_effects(
+            id,
+            &r,
+            CommandSideEffects { creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, preserve_target, path_mask },
+        );
         self.perf.last_command = id.to_string();
         self.perf.command_ms = gpu_canvas::now_ms() - t0;
         if self.run_depth == 1 {
@@ -230,16 +242,8 @@ impl PhotocraftApp {
         self.tool_override.unwrap_or(self.ui.tool)
     }
 
-    fn sync_command_side_effects(
-        &mut self,
-        id: &str,
-        result: &Result<Value, String>,
-        creates_active_mask: bool,
-        creates_active_vector_mask: bool,
-        creates_adjustment_or_fill: bool,
-        preserve_target: bool,
-        path_mask: bool,
-    ) {
+    fn sync_command_side_effects(&mut self, id: &str, result: &Result<Value, String>, effects: CommandSideEffects) {
+        let CommandSideEffects { creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, preserve_target, path_mask } = effects;
         if result.is_ok() && ADDS_LAYER_MASK.contains(&id) {
             // Adding an explicit mask targets it, as in Photoshop (#2166).
             self.ui.mask_target = true;

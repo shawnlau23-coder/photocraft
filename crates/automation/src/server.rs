@@ -1421,28 +1421,61 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn dropping_a_waited_command_cancels_its_job() {
         let mcp = PhotocraftMcp::headless();
-        mcp.headless_op(|h| {
-            h.command_run("file.new", json!({"width": 6000, "height": 6000}))?;
-            h.command_run("filter.noise.addNoise", json!({"amount": 50}))
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8}))).await.unwrap().unwrap();
+        let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+        let deadline = std::time::Duration::from_secs(10);
+        let (started, worker_started) = tokio::sync::oneshot::channel();
+        let (polled, job_polled) = tokio::sync::oneshot::channel();
+        let (release, hold) = std::sync::mpsc::channel();
+        let (finished, worker_finished) = tokio::sync::oneshot::channel();
+        let mut waiter = Waiter::new(None);
+        waiter.headless_job_polled = Some(polled);
+        let mut waited = Box::pin(mcp.headless_wait_with(
+            move |h| {
+                Ok(h.session.start_job(
+                    "test.waited",
+                    json!({}),
+                    "Waited cancellation test",
+                    true,
+                    move |ctx| {
+                        started.send(()).unwrap();
+                        hold.recv_timeout(deadline).unwrap();
+                        let result = ctx.check();
+                        finished.send(result.is_err()).unwrap();
+                        result
+                    },
+                    |session, ()| session.execute("layer.new.layer", json!({})),
+                )?)
+            },
+            &mut waiter,
+            (0, 1),
+        ));
+        tokio::time::timeout(deadline, async {
+            tokio::select! {
+                result = &mut waited => panic!("the job ended before the waiter was dropped: {result:?}"),
+                () = async {
+                    worker_started.await.unwrap();
+                    job_polled.await.unwrap();
+                } => {}
+            }
         })
         .await
-        .unwrap()
-        .unwrap();
-        let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
-        let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), waited).await.is_err(), "the blur ended before it was dropped");
-        let t = std::time::Instant::now();
-        loop {
-            let (running, cancelled) =
-                mcp.headless_op(|h| Ok((h.session.has_jobs(), h.session.jobs_with_recent().iter().any(|j| j.state == "cancelled")))).await.unwrap().unwrap();
-            if !running {
-                assert!(cancelled, "the job ended without being cancelled");
-                break;
+        .expect("the worker must start and the waiter must observe it running");
+        drop(waited);
+
+        tokio::time::timeout(deadline, async {
+            loop {
+                let cancelled = mcp.headless_op(|h| Ok(h.session.jobs_with_recent().iter().any(|j| j.state == "cancelled"))).await.unwrap().unwrap();
+                if cancelled {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
-            assert!(t.elapsed().as_secs() < 30, "the dropped job kept running");
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        })
+        .await
+        .expect("dropping the waiter must cancel the job");
+        release.send(()).unwrap();
+        assert!(tokio::time::timeout(deadline, worker_finished).await.unwrap().unwrap(), "the worker must observe cancellation");
         assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
     }
 

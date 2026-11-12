@@ -1125,6 +1125,12 @@ impl GpuCanvas {
         }
     }
 
+    /// Drop cached document resources between cold benchmark samples while keeping the GPU device.
+    #[doc(hidden)]
+    pub fn clear_benchmark_document_caches(&self) {
+        self.retain(&[], &[]);
+    }
+
     /// Free textures, display LUTs and their signatures for documents not in `live`.
     pub(crate) fn retain(&self, live: &[CanvasTextureKey], documents: &[photocraft_doc::DocId]) {
         let mut renderer = self.rs.renderer.write();

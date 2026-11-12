@@ -1,5 +1,13 @@
 //! Per-window input histograms, using the existing CPU compositor and tone binning.
-use super::*;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Weak},
+};
+
+use photocraft_doc::{DocId, Document, LayerId};
+
+use super::{Visibility, adjustments, initialize, project};
+use crate::PhotocraftApp;
 use crate::tone::{self, HistSource, Histograms};
 use photocraft_doc::adjust::ToneSpace;
 
