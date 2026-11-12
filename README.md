@@ -86,6 +86,16 @@ Up to two secondary views can be docked alongside the main canvas.
 
 An artist might dedicate one monitor to painting, another to a mirrored view, and a third to an overall composition or alternative color study.
 
+### Troubleshooting — Commands Not Responding
+
+If certain commands or keyboard shortcuts don't appear to work as expected, check that the **Main Canvas** has focus.
+
+You can verify which view is active by checking the **View selector in the Layers panel**.
+
+To return focus to the Main Canvas, select **View → Focus Main Canvas**.
+
+This is particularly useful when switching between the main canvas and floating or docked Independent Views.
+
 ## Downloading PhotoCraft with SGL Tools
 
 The first release candidate is **v0.22.0-rc.1 for Windows x64**.
