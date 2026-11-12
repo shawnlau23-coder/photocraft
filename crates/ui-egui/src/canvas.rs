@@ -1147,6 +1147,22 @@ pub(crate) fn secondary_sampling_click(app: &PhotocraftApp, ctx: &egui::Context,
         && !egui::Popup::is_any_open(ctx)
 }
 
+pub(crate) fn mark_secondary_activation(ctx: &egui::Context, window: u64) {
+    let key = secondary_activation_key(ctx, window);
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data_mut(|data| data.insert_temp(key, frame));
+}
+
+fn secondary_activation_key(ctx: &egui::Context, window: u64) -> egui::Id {
+    egui::Id::unique(("secondary-activation", ctx.viewport_id(), window))
+}
+
+fn secondary_activated_this_frame(ctx: &egui::Context, window: u64) -> bool {
+    let key = secondary_activation_key(ctx, window);
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data(|data| data.get_temp::<u64>(key) == Some(frame))
+}
+
 /// Secondary canvases take only navigation and color sampling from the shared tool selection.
 fn handle_secondary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasToolInput<'_>) {
     let response = input.response;
@@ -1174,6 +1190,18 @@ fn handle_secondary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, vie
         }
         return;
     }
+    if !input.under_dialog
+        && !input.menu_dismiss_press
+        && !input.hand_pan
+        && !crate::panel_docking::modal_open(app, input.ctx)
+        && !egui::Popup::is_any_open(input.ctx)
+        && secondary_editing_tool(input.tool)
+        && !app.view_composites.rendering_window.is_some_and(|id| secondary_activated_this_frame(input.ctx, id))
+        && ui.input(|i| i.pointer.primary_pressed() && !i.pointer.middle_down())
+        && (response.is_pointer_button_down_on() || response.clicked_by(PointerButton::Primary))
+    {
+        crate::notices::secondary_edit(app, input.ctx);
+    }
     match input.tool {
         Tool::Zoom | Tool::RotateView if !input.under_dialog => {
             handle_canvas_tool_navigation(app, ui, view, input, &mut buttons);
@@ -1191,6 +1219,38 @@ fn handle_secondary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, vie
         Tool::Hand if response.hovered() => input.ctx.set_cursor_icon(crate::tool_cursor::hand(input.ctx, false)),
         _ => {}
     }
+}
+
+fn secondary_editing_tool(tool: Tool) -> bool {
+    strokes_live(tool)
+        || crate::vector_ui::is_shape_tool(tool)
+        || matches!(
+            tool,
+            Tool::Move
+                | Tool::Artboard
+                | Tool::Crop
+                | Tool::PerspectiveCrop
+                | Tool::MagicEraser
+                | Tool::Gradient
+                | Tool::PaintBucket
+                | Tool::Type
+                | Tool::VerticalType
+                | Tool::Remove
+                | Tool::SpotHealing
+                | Tool::Patch
+                | Tool::ContentAwareMove
+                | Tool::RedEye
+                | Tool::ArtHistoryBrush
+                | Tool::Pen
+                | Tool::FreeformPen
+                | Tool::CurvaturePen
+                | Tool::AddAnchorPoint
+                | Tool::DeleteAnchorPoint
+                | Tool::ConvertPoint
+                | Tool::PathSelection
+                | Tool::DirectSelection
+                | Tool::Frame
+        )
 }
 
 fn handle_canvas_tool_stroke(
