@@ -59,3 +59,5 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/sgl-packages.yml
+    with:
+      macos-only: ${{ inputs.version == 'macos-only' }}

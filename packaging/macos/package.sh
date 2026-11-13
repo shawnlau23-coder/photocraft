@@ -153,7 +153,13 @@ fi
 echo "==> building $DMG"
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/PhotoCraft.app"
+if [[ "$NOTARIZE" = 1 ]]; then
+  ditto "$APP" "$STAGE/PhotoCraft.app"
+else
+  # Exclude Finder metadata and resource forks from the unsigned-distribution copy.
+  ditto --noextattr --norsrc "$APP" "$STAGE/PhotoCraft.app"
+fi
+codesign --verify --strict --deep "$STAGE/PhotoCraft.app"
 ln -s /Applications "$STAGE/Applications"
 # Finder window layout: background, icon size and positions (packaging/macos/dmg/README.md).
 mkdir -p "$STAGE/.background"

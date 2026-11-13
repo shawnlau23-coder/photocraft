@@ -1,6 +1,10 @@
 name: SGL packages
 on:
   workflow_call:
+    inputs:
+      macos-only:
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -8,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, ubuntu-22.04]
+        os: ${{ fromJSON(inputs.macos-only && '["macos-15"]' || '["macos-15","ubuntu-22.04"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
@@ -32,11 +36,20 @@ jobs:
           test -s "$CRAFT_FONTS_DIR/fonts/manifest.txt"
           grep -F 'check_updates: None' apps/photocraft/src/services.rs
           rustup toolchain install 1.99.1 --profile minimal
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: runner.os == 'macOS'
+        with:
+          ref: ${{ github.sha }}
+          path: macos-packaging-revision
+          persist-credentials: false
+          sparse-checkout: packaging/macos/package.sh
+          sparse-checkout-cone-mode: false
       - name: Universal macOS DMG
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cp macos-packaging-revision/packaging/macos/package.sh packaging/macos/package.sh
           bash packaging/macos/package.sh --arch universal
           bash packaging/macos/verify.sh --arch universal
           dmg=(dist/release/*-macos-universal.dmg)
