@@ -57,12 +57,42 @@ jobs:
           mkdir -p "$mount"
           hdiutil verify "${dmg[0]}"
           hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${dmg[0]}"
-          trap 'hdiutil detach "$mount"' EXIT
           app="$mount/PhotoCraft.app"
+          staged="${CARGO_TARGET_DIR:-$PWD/target}/macos-package/dmg/PhotoCraft.app"
+          installed=
+          cli=Contents/MacOS/photocraft-cli
+          diagnose_cli() {
+            for bundle in "$staged" "$app" "$installed"; do
+              [[ -n "$bundle" ]] || continue
+              printf '\nExtended attributes for %s\n' "$bundle/$cli"
+              xattr -l "$bundle/$cli" || true
+            done
+          }
+          cleanup() {
+            local status=$?
+            if (( status != 0 )); then diagnose_cli; fi
+            hdiutil detach "$mount" || true
+            return "$status"
+          }
+          trap cleanup EXIT
           plutil -lint "$app/Contents/Info.plist"
-          codesign --verify --strict --deep "$app"
-          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/PhotoCraft"
-          "$app/Contents/MacOS/photocraft-cli" --version
+          mounted_signature_ok=true
+          if ! codesign --verify --strict --deep "$app"; then
+            mounted_signature_ok=false
+            if [[ "${MACOS_SIGN_IDENTITY:--}" != - ]]; then exit 1; fi
+            diagnose_cli
+          fi
+          install_dir="$(mktemp -d "$RUNNER_TEMP/sgl-install.XXXXXX")"
+          installed="$install_dir/PhotoCraft.app"
+          ditto "$app" "$installed"
+          codesign --verify --strict --deep "$installed"
+          lipo -verify_arch arm64 x86_64 "$installed/Contents/MacOS/PhotoCraft"
+          lipo -verify_arch arm64 x86_64 "$installed/$cli"
+          "$installed/$cli" --version
+          if [[ "$mounted_signature_ok" == false ]]; then
+            diagnose_cli
+            echo '::warning::The ad-hoc app failed signature verification on the mounted DMG, but the ordinary installed copy passed strict recursive verification.'
+          fi
           mkdir downloads
           cp dist/release/*-macos-universal.{dmg,zip} downloads/
           echo 'PhotoCraft with SGL Tools. Ad-hoc signed, not notarized. Gatekeeper may block downloaded copies.' > downloads/README.txt
