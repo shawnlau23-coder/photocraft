@@ -1,0 +1,87 @@
+name: SGL packages
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CRAFT_FONTS_REQUIRED: '1'
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      RUSTUP_TOOLCHAIN: '1.99.1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 8b3b792cad754466e0a5a92cd32782ac6f6d6099
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+      - name: Configure approved build inputs
+        run: |
+          test "$(git rev-parse HEAD)" = 8b3b792cad754466e0a5a92cd32782ac6f6d6099
+          test -s "$CRAFT_FONTS_DIR/fonts/manifest.txt"
+          grep -F 'check_updates: None' apps/photocraft/src/services.rs
+          rustup toolchain install 1.99.1 --profile minimal
+      - name: Universal macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          bash packaging/macos/package.sh --arch universal
+          bash packaging/macos/verify.sh --arch universal
+          dmg=(dist/release/*-macos-universal.dmg)
+          mount="$RUNNER_TEMP/sgl-dmg"
+          mkdir -p "$mount"
+          hdiutil verify "${dmg[0]}"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${dmg[0]}"
+          trap 'hdiutil detach "$mount"' EXIT
+          app="$mount/PhotoCraft.app"
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --verify --strict --deep "$app"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/PhotoCraft"
+          "$app/Contents/MacOS/photocraft-cli" --version
+          mkdir downloads
+          cp dist/release/*-macos-universal.{dmg,zip} downloads/
+          echo 'PhotoCraft with SGL Tools. Ad-hoc signed, not notarized. Gatekeeper may block downloaded copies.' > downloads/README.txt
+      - name: Linux x86-64 AppImage and tarball
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config clang libclang-dev libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev libasound2-dev libudev-dev libvulkan1 desktop-file-utils squashfs-tools
+          bash packaging/linux/package.sh --formats "appimage tar"
+          mkdir downloads
+          cp dist/release/*.AppImage dist/release/*.tar.gz downloads/
+          echo 'PhotoCraft with SGL Tools. Make the AppImage executable before launching.' > downloads/README.txt
+          appimage=("$PWD"/downloads/*.AppImage)
+          archive=("$PWD"/downloads/*.tar.gz)
+          cd "$RUNNER_TEMP"
+          "${appimage[0]}" --appimage-extract
+          file squashfs-root/usr/bin/photocraft | grep -F 'x86-64'
+          ldd squashfs-root/usr/bin/photocraft | tee libraries.txt
+          ! grep -F 'not found' libraries.txt
+          squashfs-root/AppRun --version
+          tar -xzf "${archive[0]}"
+          cli=(photocraft-*/bin/photocraft-cli)
+          "${cli[0]}" --version
+      - name: Verify checksums and sizes
+        working-directory: downloads
+        run: |
+          shasum -a 256 photocraft-* | tee SHA256SUMS.txt
+          shasum -a 256 -c SHA256SUMS.txt
+          wc -c photocraft-*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: PhotoCraft-with-SGL-Tools-${{ matrix.os }}
+          path: downloads/
+          if-no-files-found: error
