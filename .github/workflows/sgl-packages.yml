@@ -86,8 +86,17 @@ jobs:
           installed="$install_dir/PhotoCraft.app"
           ditto "$app" "$installed"
           codesign --verify --strict --deep "$installed"
-          lipo -verify_arch arm64 x86_64 "$installed/Contents/MacOS/PhotoCraft"
-          lipo -verify_arch arm64 x86_64 "$installed/$cli"
+          # lipo -archs + match, as in packaging/macos/verify.sh: the runner's lipo parses
+          # -verify_arch as a variadic arch list, so `lipo -verify_arch a b <file>` is invalid there.
+          for bin in "Contents/MacOS/PhotoCraft" "$cli"; do
+            archs="$(lipo -archs "$installed/$bin")"
+            for a in arm64 x86_64; do
+              case " $archs " in
+                *" $a "*) ;;
+                *) echo "error: installed $bin lacks $a (has: $archs)" >&2; exit 1 ;;
+              esac
+            done
+          done
           "$installed/$cli" --version
           if [[ "$mounted_signature_ok" == false ]]; then
             diagnose_cli
