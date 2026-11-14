@@ -153,19 +153,43 @@ fi
 echo "==> building $DMG"
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/PhotoCraft.app"
+if [[ "$NOTARIZE" = 1 ]]; then
+  ditto "$APP" "$STAGE/PhotoCraft.app"
+else
+  # Exclude Finder metadata and resource forks from the unsigned-distribution copy.
+  ditto --noextattr --norsrc "$APP" "$STAGE/PhotoCraft.app"
+fi
+codesign --verify --strict --deep "$STAGE/PhotoCraft.app"
 ln -s /Applications "$STAGE/Applications"
 # Finder window layout: background, icon size and positions (packaging/macos/dmg/README.md).
 mkdir -p "$STAGE/.background"
 cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
 cp "$HERE/dmg/dmg-layout.DS_Store" "$STAGE/.DS_Store"
-rm -f "$DMG" "$WORK/raw.dmg"
-# makehybrid + convert builds the image without attaching a device, unlike `create -srcfolder`,
-# which is flaky on CI runners ("Resource busy") and hangs in sandboxed sessions.
+rm -f "$DMG"
+# `hdiutil create -srcfolder` writes the staged files as they are. `makehybrid -hfs` stamped a
+# com.apple.FinderInfo (Finder location -1,-1) on every file it wrote, which `codesign --verify
+# --strict` rejects as "Finder information, or similar detritus" on the app in the image and on
+# a copy installed from it (storytold/photocraft#3034; fix follows storytold/pdfcraft#823).
+# `create` attaches a device while it copies, which fails now and then on CI runners ("Resource
+# busy"), so it gets up to five tries with growing pauses.
 # The volume name has no version: .DS_Store finds the background through an alias that includes it.
-hdiutil makehybrid -hfs -hfs-volume-name "PhotoCraft" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
-hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
-rm -f "$WORK/raw.dmg"
+# Usage: hdiutil_retry <what> <hdiutil args...>; tries five times before failing the build.
+hdiutil_retry() {
+  local what="$1" attempt
+  shift
+  for attempt in 1 2 3 4 5; do
+    if hdiutil "$@"; then
+      return 0
+    fi
+    if [[ "$attempt" = 5 ]]; then
+      echo "hdiutil $what failed after 5 attempts" >&2
+      return 1
+    fi
+    warn "hdiutil $what failed (attempt $attempt of 5); retrying in $((attempt * 10))s"
+    sleep $((attempt * 10))
+  done
+}
+hdiutil_retry create create -srcfolder "$STAGE" -volname "PhotoCraft" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG"
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 if [[ "$NOTARIZE" = 1 ]]; then

@@ -111,6 +111,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Window › Arrange: tiled / n-up layouts show several documents side by side; the active one
     // takes input, a click elsewhere activates that document.
     if let Some(shown) = arranged_cells(app, rect) {
+        let pressed_tile = pressed_tile(app, ui.ctx(), &shown);
         app.arrange_start = shown.first().map_or(0, |(d, _)| *d);
         let t = crate::theme::Tokens::get(ui.ctx());
         // A press on a border grip drags the border (`drag_borders`); it activates no document.
@@ -122,6 +123,10 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let v = canvas_view(app, ui, d, cell, view, d == active_doc);
             if d != active_doc {
                 app.ui.views[d] = v;
+                if pressed_tile == Some(d) {
+                    app.ui.focused_window = None;
+                    app.session.set_active(d);
+                }
             }
             let stroke = if d == active_doc { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, Color32::from_black_alpha(160)) };
             ui.painter().rect_stroke(cell, 0, stroke, egui::StrokeKind::Inside);
@@ -131,6 +136,18 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let view = app.ui.views[idx].clone();
     canvas_view(app, ui, idx, rect, view, app.session.active_index() == Some(idx));
+}
+
+/// Resolve tiled activation here as well as in the shell so an embedded document area
+/// handles its own canvases. Only the widget owning the press can activate a tile.
+fn pressed_tile(app: &PhotocraftApp, ctx: &egui::Context, shown: &[(usize, Rect)]) -> Option<usize> {
+    if !ctx.input(|i| i.viewport().focused != Some(false) && i.pointer.primary_pressed())
+        || crate::panel_docking::modal_open(app, ctx)
+        || egui::Popup::is_any_open(ctx)
+    {
+        return None;
+    }
+    shown.iter().map(|&(index, _)| index).find(|&index| app.session.documents().get(index).is_some_and(|st| super::canvas_pressed(ctx, st.doc.id, None)))
 }
 
 /// Window › Arrange: the borders between the documents are dragged to give one more room, as in
@@ -813,13 +830,8 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 close = true;
             }
             focused = ui.ctx().input(|i| i.viewport().focused == Some(true));
-            if focused
-                && class != egui::ViewportClass::EmbeddedWindow
-                && (!w.focused || super::canvas_pressed(ui.ctx(), doc, Some(w.id)) && ui.input(|i| i.pointer.any_pressed()))
-                && !super::secondary_sampling_click(app, ui.ctx(), doc, w.id)
-            {
-                app.ui.focused_window = Some(w.id);
-                app.session.set_active(w.document);
+            if focused && class != egui::ViewportClass::EmbeddedWindow {
+                update_floating_view_focus(app, ui.ctx(), &w, doc);
             }
             egui::Panel::top(egui::Id::unique(("independent-flip", w.id))).resizable(false).show(ui, |ui| {
                 super::docked_view::controls(app, ui, &w, false);
@@ -828,6 +840,9 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                     let rect = ui.available_rect_before_wrap();
                     secondary_canvas(app, ui, &w, rect, Some((class, vid, focused)));
+                    if ui.ctx().viewport_id() != egui::ViewportId::ROOT {
+                        crate::notices::show_for_window(app, ui.ctx(), Some(w.id));
+                    }
                 });
             }
         });
@@ -846,6 +861,18 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         retain_gpu_documents(app);
     }
     crate::view_visibility::retain(app);
+}
+
+pub(crate) fn update_floating_view_focus(app: &mut PhotocraftApp, ctx: &egui::Context, w: &crate::state::DocWindow, doc: photocraft_doc::DocId) {
+    if (!w.focused || super::canvas_pressed(ctx, doc, Some(w.id)) && ctx.input(|i| i.pointer.any_pressed()))
+        && !super::secondary_sampling_click(app, ctx, doc, w.id)
+    {
+        if !w.focused || app.ui.focused_window != Some(w.id) {
+            super::mark_secondary_activation(ctx, w.id);
+        }
+        app.ui.focused_window = Some(w.id);
+        app.session.set_active(w.document);
+    }
 }
 
 pub(super) fn secondary_canvas(

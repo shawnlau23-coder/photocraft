@@ -317,6 +317,50 @@ fn independent_flip_child_canvas_pan_and_zoom_do_not_change_the_main_camera() {
     assert_eq!(harness.state().ui.views[0], main);
 }
 
+#[test]
+fn floating_secondary_editing_press_posts_a_local_notice_without_editing() {
+    let (mut app, ctx) = app();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = window(&mut app, &ctx);
+    app.ui.tool = crate::Tool::Brush;
+    let before = app.session.active().unwrap().clone();
+    let viewport = ViewportId::from_hash_of(("docwin", id));
+    let rect = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0));
+    let p = rect.center();
+    let mut pass = |events, was_focused| {
+        let mut raw = RawInput { viewport_id: viewport, screen_rect: Some(rect), events, ..Default::default() };
+        raw.viewports.insert(viewport, ViewportInfo { focused: Some(true), ..Default::default() });
+        let mut out = ctx.run_ui(raw, |ui| {
+            let mut window = app.ui.windows[0].clone();
+            window.focused = was_focused;
+            let doc = app.session.active().unwrap().doc.id;
+            crate::canvas::tabs::update_floating_view_focus(&mut app, ui.ctx(), &window, doc);
+            app.with_document_window(id, |app| {
+                let camera = app.ui.views[0].clone();
+                app.ui.views[0] = crate::canvas::canvas_view(app, ui, 0, rect, camera, false);
+            });
+            crate::notices::show_for_window(&mut app, ui.ctx(), Some(id));
+        });
+        out.textures_delta.clear();
+        app.ui.notices.iter().filter(|n| n.title == crate::notices::SECONDARY_EDIT_TITLE).count()
+    };
+    let press = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    pass(vec![Event::PointerMoved(p)], true);
+    assert_eq!(pass(vec![press(p, true)], false), 0);
+    assert_eq!(pass(vec![press(p, false)], true), 0);
+    assert_eq!(pass(vec![press(p, true)], true), 1);
+    let end = p + vec2(25.0, 5.0);
+    assert_eq!(pass(vec![Event::PointerMoved(end)], true), 1);
+    assert_eq!(pass(vec![press(end, false)], true), 1);
+    let notices: Vec<_> = app.ui.notices.iter().filter(|n| n.title == crate::notices::SECONDARY_EDIT_TITLE).collect();
+    assert_eq!(notices.len(), 1);
+    assert!(notices[0].shown_at.is_some(), "the floating viewport must render the notice");
+    let after = app.session.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before.doc, &after.doc));
+    assert_eq!(before.history.past_len(), after.history.past_len());
+    assert_eq!(before.is_dirty(), after.is_dirty());
+}
+
 fn keyboard_zoom_pass(app: &mut PhotocraftApp, ctx: &egui::Context, window: Option<u64>, key: egui::Key, shift: bool, focused: bool) -> bool {
     let viewport = window.map_or(ViewportId::ROOT, |id| ViewportId::from_hash_of(("docwin", id)));
     let modifiers = Modifiers { ctrl: true, command: true, shift, ..Modifiers::NONE };
