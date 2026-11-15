@@ -5,10 +5,17 @@
   Uses Windows Installer's safe session (OpenPackage option 1). Only property-setting custom
   actions are exercised. No AppSearch, install, repair, removal or file-writing action runs.
 #>
-param([Parameter(Mandatory = $true)] [string] $MsiPath)
+param([Parameter(Mandatory = $true)] [string] $MsiPath, [string] $PolicyFile)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$policy = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'install-policy.json') | ConvertFrom-Json
+if (-not $PolicyFile) { $PolicyFile = Join-Path $PSScriptRoot 'install-policy.json' }
+$policy = Get-Content -Raw -LiteralPath $PolicyFile | ConvertFrom-Json
+# The remembered-folder PATH and legacy-exe searches read App Paths\photocraft.exe, a namespace
+# keyed by the exe file name. A second product installing beside the first (the SGL edition,
+# "appPathsSearch": false) ships the same photocraft.exe, so reading or writing that key would
+# let it restore the other product's folder into its own install; such products search only
+# their own InstallDir/InstallFolder keys. Fixtures that say nothing keep the full contract.
+$appPathsSearch = -not ($policy.PSObject.Properties.Name -contains 'appPathsSearch') -or [bool]$policy.appPathsSearch
 function Read-Rows($Database, [string] $Sql, [int] $Columns) {
   $view = $Database.OpenView($Sql)
   try {
@@ -204,9 +211,11 @@ try {
       throw 'Silent updates must restore the folder before directory costing.'
     }
   }
-  foreach ($resolver in @('CraftUFromLegacyExe','CraftMFromLegacyExe')) {
-    if (-not ($execute['AppSearch'] -lt $execute[$resolver] -and $execute[$resolver] -lt $execute['LaunchConditions'])) {
-      throw 'Both legacy folder resolvers must run after AppSearch and before the launch checks.'
+  if ($appPathsSearch) {
+    foreach ($resolver in @('CraftUFromLegacyExe','CraftMFromLegacyExe')) {
+      if (-not ($execute['AppSearch'] -lt $execute[$resolver] -and $execute[$resolver] -lt $execute['LaunchConditions'])) {
+        throw 'Both legacy folder resolvers must run after AppSearch and before the launch checks.'
+      }
     }
   }
   # AppSearch itself never runs in this safe session, so check the compiled searches and then run the
@@ -219,17 +228,20 @@ try {
   # Suffix, how to match the key, key, value name, locator type (2 = raw value, 1 = file; the 64-bit flag is masked off).
   $searchContract = @(
     @('DIR',       'exact', "Software\$($policy.name)", 'InstallDir',    '2'),
-    @('FOLDER',    'exact', "Software\$($policy.name)", 'InstallFolder', '2'),
-    @('PATH',      'regex', $appPaths,                  'Path',          '2'),
-    @('EXEFOLDER', 'regex', $appPaths,                  '',              '1'),
-    @('EXE',       'regex', $appPaths,                  '',              '1'))
+    @('FOLDER',    'exact', "Software\$($policy.name)", 'InstallFolder', '2'))
+  if ($appPathsSearch) {
+    $searchContract += @(
+      @('PATH',      'regex', $appPaths,                  'Path',          '2'),
+      @('EXEFOLDER', 'regex', $appPaths,                  '',              '1'),
+      @('EXE',       'regex', $appPaths,                  '',              '1'))
+  }
   $resolverCases = @(
-    @{ name = 'every record, DIR wins';        dir = 'D:\Dir\'; folder = 'D:\Folder\'; path = 'D:\Path\'; exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = '';            expected = 'D:\Dir\' },
-    @{ name = 'FOLDER wins without DIR';       dir = '';        folder = 'D:\Folder\'; path = 'D:\Path\'; exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = '';            expected = 'D:\Folder\' },
-    @{ name = 'PATH wins without DIR, FOLDER'; dir = '';        folder = '';           path = 'D:\Path\'; exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = '';            expected = 'D:\Path\' },
-    @{ name = 'legacy exe folder is last';     dir = '';        folder = '';           path = '';         exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = '';            expected = 'D:\Exe\' },
-    @{ name = 'legacy folder needs the exe';   dir = '';        folder = '';           path = '';         exeFolder = 'D:\Exe\'; exe = '';               existing = '';            expected = '' },
-    @{ name = 'a preset folder is kept';       dir = 'D:\Dir\'; folder = 'D:\Folder\'; path = 'D:\Path\'; exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = 'P:\Preset\'; expected = 'P:\Preset\' })
+    @{ name = 'every record, DIR wins';        dir = 'D:\Dir\'; folder = 'D:\Folder\'; path = 'D:\Path\'; exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = '';            expected = 'D:\Dir\';      appPaths = $false },
+    @{ name = 'FOLDER wins without DIR';       dir = '';        folder = 'D:\Folder\'; path = 'D:\Path\'; exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = '';            expected = 'D:\Folder\';     appPaths = $false },
+    @{ name = 'PATH wins without DIR, FOLDER'; dir = '';        folder = '';           path = 'D:\Path\'; exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = '';            expected = 'D:\Path\';       appPaths = $true },
+    @{ name = 'legacy exe folder is last';     dir = '';        folder = '';           path = '';         exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = '';            expected = 'D:\Exe\';        appPaths = $true },
+    @{ name = 'legacy folder needs the exe';   dir = '';        folder = '';           path = '';         exeFolder = 'D:\Exe\'; exe = '';               existing = '';            expected = '';             appPaths = $true },
+    @{ name = 'a preset folder is kept';       dir = 'D:\Dir\'; folder = 'D:\Folder\'; path = 'D:\Path\'; exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = 'P:\Preset\'; expected = 'P:\Preset\';     appPaths = $false })
   foreach ($scopeSpec in @(@('U', '1', 'CRAFT_USER_DIR'), @('M', '2', 'CRAFT_MACHINE_DIR'))) {
     $letter = $scopeSpec[0]; $target = $scopeSpec[2]
     foreach ($item in $searchContract) {
@@ -243,10 +255,13 @@ try {
     $chain = @(Read-Rows $database 'SELECT `Action`, `Sequence`, `Condition` FROM `InstallExecuteSequence`' 3 |
       Where-Object { $_[0] -match "^Craft${letter}From" } | Sort-Object { [int]$_[1] })
     $order = @($chain | ForEach-Object { $_[0] }) -join ','
-    if ($order -ne "Craft${letter}FromDIR,Craft${letter}FromFOLDER,Craft${letter}FromPATH,Craft${letter}FromLegacyExe") {
+    $expectedOrder = @("Craft${letter}FromDIR", "Craft${letter}FromFOLDER")
+    if ($appPathsSearch) { $expectedOrder += @("Craft${letter}FromPATH", "Craft${letter}FromLegacyExe") }
+    if ($order -ne ($expectedOrder -join ',')) {
       throw "Remembered-folder resolvers for scope $letter run in the wrong order: $order"
     }
     foreach ($case in $resolverCases) {
+      if ($case.appPaths -and -not $appPathsSearch) { continue }
       Set-SessionProperty $session $target $case.existing
       Set-SessionProperty $session "CRAFT_${letter}_DIR" $case.dir
       Set-SessionProperty $session "CRAFT_${letter}_FOLDER" $case.folder

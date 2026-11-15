@@ -1,0 +1,169 @@
+{
+  "id": "photocraft-sgl",
+  "name": "PhotoCraft with SGL Tools",
+  "upgradeCode": "967FF165-E6F5-4C33-81B1-4DCED5174EE9",
+  "sources": [
+    "photocraft-sgl.wxs"
+  ],
+  "icon": "assets/app-icon/photocraft.ico",
+  "localization": [
+    "photocraft-sgl.en-us.wxl"
+  ],
+  "extensions": [
+    "UI",
+    "Util"
+  ],
+  "payloads": [
+    "photocraft-cli.exe",
+    "photocraft.exe"
+  ],
+  "appPathsSearch": false,
+  "registry": [
+    [
+      "-1",
+      "Software\\Classes\\PhotocraftSGL.PhotoshopDocument\\shell\\open\\command",
+      "",
+      "\"[#PhotocraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\PhotocraftSGL.Image\\shell\\open\\command",
+      "",
+      "\"[#PhotocraftExe]\" \"%1\""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.pcraft\\OpenWithProgids",
+      "PhotocraftSGL.Document",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.psd\\OpenWithProgids",
+      "PhotocraftSGL.PhotoshopDocument",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.psb\\OpenWithProgids",
+      "PhotocraftSGL.PhotoshopDocument",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.pdn\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.ora\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.kra\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.krz\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.png\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.jpg\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.jpeg\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.tif\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.tiff\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.webp\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.gif\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.bmp\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.tga\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.exr\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.hdr\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.avif\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.qoi\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\Classes\\.ico\\OpenWithProgids",
+      "PhotocraftSGL.Image",
+      ""
+    ],
+    [
+      "-1",
+      "Software\\PhotoCraft with SGL Tools",
+      "InstallDir",
+      "[INSTALLFOLDER]"
+    ]
+  ],
+  "mode": "dualScope",
+  "_comment": "Independent identity for the SGL edition (see photocraft-sgl.wxs). The deliberately absent entries, compared with install-policy.json: no App Paths\\photocraft.exe and no Software\\Classes\\Applications\\photocraft.exe rows (exe-name-keyed namespaces shared with upstream; the two products must not fight over one key), and no default .pcraft association (\"appPathsSearch\": false also drops the PATH/legacy-exe remembered-folder searches for the same reason)."
+}
