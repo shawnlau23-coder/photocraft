@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version override for a test run, e.g. 0.2.0-rc.1 (empty: Cargo.toml)"
+        description: "Version override for a test run, e.g. 0.2.0-rc.1 (empty: Cargo.toml). On development/sgl-tools, 'macos-only' or 'windows-only' instead restricts which SGL packages are built."
         type: string
         default: ""
 
@@ -61,3 +61,4 @@ jobs:
     uses: ./.github/workflows/sgl-packages.yml
     with:
       macos-only: ${{ inputs.version == 'macos-only' }}
+      windows-only: ${{ inputs.version == 'windows-only' }}

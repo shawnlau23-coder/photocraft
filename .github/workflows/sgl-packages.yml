@@ -5,24 +5,46 @@ on:
       macos-only:
         type: boolean
         default: false
+      windows-only:
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   package:
     strategy:
       fail-fast: false
+      # macos-only: macOS only; windows-only: the Windows job alone (macos-only wins if both
+      # are somehow set); otherwise all three platforms in one run. One run of one commit is the
+      # point: the three artifacts then come from the same source, and a per-platform re-run is
+      # only for a retry, which must be recorded as such in the provenance.
       matrix:
-        os: ${{ fromJSON(inputs.macos-only && '["macos-15"]' || '["macos-15","ubuntu-22.04"]') }}
+        os: ${{ fromJSON(inputs.macos-only && '["macos-15"]' || inputs.windows-only && '["windows-latest"]' || '["macos-15","ubuntu-22.04","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
       CRAFT_FONTS_REQUIRED: '1'
       CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
       RUSTUP_TOOLCHAIN: '1.99.1'
+      # The one place the "PhotoCraft with SGL Tools" edition is chosen, for all three platforms.
+      # PHOTOCRAFT_SGL_EDITION is read at compile time (option_env!) by apps/photocraft/src/app_dirs.rs
+      # and crates/ui-egui/src/os_window.rs: the settings/recovery folders, the single-instance lock
+      # and the window/app id become this product's own, so an installed SGL copy and an installed
+      # upstream copy share neither preferences nor document hand-off. SGL_EDITION is read by the
+      # packaging (bundle identifier and plist, DMG volume name, desktop/metainfo/icon ids, and via
+      # package.ps1 -Edition sgl the WiX identity). With either unset, that platform builds exactly
+      # upstream's artifact.
+      PHOTOCRAFT_SGL_EDITION: '1'
+      SGL_EDITION: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 8b3b792cad754466e0a5a92cd32782ac6f6d6099
+          # The application source and the packaging now live in the same approved commit, so this
+          # run's own commit is the build input and there is no separate pin to check out - and no
+          # overlay to patch packaging files onto an older tree (both are in the tree). The step
+          # below still asserts the checkout is exactly the dispatched commit, so a future step
+          # that adds a `ref:` cannot silently change what was built.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -31,34 +53,41 @@ jobs:
           path: craft-fonts
           persist-credentials: false
       - name: Configure approved build inputs
+        shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = 8b3b792cad754466e0a5a92cd32782ac6f6d6099
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
           test -s "$CRAFT_FONTS_DIR/fonts/manifest.txt"
           grep -F 'check_updates: None' apps/photocraft/src/services.rs
           rustup toolchain install 1.99.1 --profile minimal
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        if: runner.os == 'macOS'
-        with:
-          ref: ${{ github.sha }}
-          path: macos-packaging-revision
-          persist-credentials: false
-          sparse-checkout: packaging/macos/package.sh
-          sparse-checkout-cone-mode: false
+      - name: Unit tests for the identity switch
+        shell: bash
+        run: |
+          # The two source files that read the compile-time edition flag, plus the packaged-identity
+          # consistency test (the .desktop StartupWMClass must equal the compiled app id). Cheap
+          # truth for all three legs: it compiles with PHOTOCRAFT_SGL_EDITION set, so the SGL
+          # branches are the ones under test here, and both branch sets are covered (the tests pin
+          # data_dir_name for both flags, and both packaged desktop entries are checked against
+          # this build's app id). Per-leg on purpose: the folder-name helper is cfg-gated per
+          # platform, so each runner proves its own convention.
+          cargo test -p photocraft --bin photocraft -- app_dirs the_desktop_entry_names_the_window_class
+          cargo test -p photocraft-ui-egui --lib os_window
       - name: Universal macOS DMG
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
-          cp macos-packaging-revision/packaging/macos/package.sh packaging/macos/package.sh
           bash packaging/macos/package.sh --arch universal
           bash packaging/macos/verify.sh --arch universal
-          dmg=(dist/release/*-macos-universal.dmg)
+          # The SGL name proves the edition switch applied; an upstream-named DMG here would mean
+          # SGL_EDITION did not reach the packaging, and this step would stop rather than upload it.
+          dmg=(dist/release/photocraft-sgl-*-macos-universal.dmg)
+          test "${#dmg[@]}" = 1
           mount="$RUNNER_TEMP/sgl-dmg"
           mkdir -p "$mount"
           hdiutil verify "${dmg[0]}"
           hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${dmg[0]}"
-          app="$mount/PhotoCraft.app"
-          staged="${CARGO_TARGET_DIR:-$PWD/target}/macos-package/dmg/PhotoCraft.app"
+          app="$mount/PhotoCraft with SGL Tools.app"
+          staged="${CARGO_TARGET_DIR:-$PWD/target}/macos-package/dmg/PhotoCraft with SGL Tools.app"
           installed=
           cli=Contents/MacOS/photocraft-cli
           diagnose_cli() {
@@ -76,6 +105,15 @@ jobs:
           }
           trap cleanup EXIT
           plutil -lint "$app/Contents/Info.plist"
+          # The bundle identity this edition exists for, on the artifact as shipped: LaunchServices
+          # keys on the identifier, so if it were upstream's the two products would be one app no
+          # matter what the folder and volume were called. The volume name is checked too: the DMG
+          # layout's background alias (packaging/macos/dmg/) resolves through it.
+          [[ "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = ai.storyteller.photocraft.sgl ]]
+          [[ "$(plutil -extract CFBundleName raw "$app/Contents/Info.plist")" = "PhotoCraft with SGL Tools" ]]
+          [[ "$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")" = PhotoCraft ]]
+          codesign -d --verbose=2 "$app" 2>&1 | grep -Fx 'Identifier(ai.storyteller.photocraft.sgl)'
+          diskutil info "$mount" | grep -Eq '^ *Volume Name: +PhotoCraft with SGL Tools$'
           mounted_signature_ok=true
           if ! codesign --verify --strict --deep "$app"; then
             mounted_signature_ok=false
@@ -83,7 +121,7 @@ jobs:
             diagnose_cli
           fi
           install_dir="$(mktemp -d "$RUNNER_TEMP/sgl-install.XXXXXX")"
-          installed="$install_dir/PhotoCraft.app"
+          installed="$install_dir/PhotoCraft with SGL Tools.app"
           ditto "$app" "$installed"
           codesign --verify --strict --deep "$installed"
           # lipo -archs + match, as in packaging/macos/verify.sh: the runner's lipo parses
@@ -98,40 +136,263 @@ jobs:
             done
           done
           "$installed/$cli" --version
+          # The nested CLI carries this edition's code identity (package.sh signs it with $CLI_ID),
+          # so no artifact of this build carries another product's identifier.
+          codesign -d --verbose=2 "$installed/$cli" 2>&1 | grep -Fx 'Identifier(ai.storyteller.photocraft.sgl-cli)'
           if [[ "$mounted_signature_ok" == false ]]; then
             diagnose_cli
             echo '::warning::The ad-hoc app failed signature verification on the mounted DMG, but the ordinary installed copy passed strict recursive verification.'
           fi
+          # Proof, from a real run, that the *binary* (not just the plist) keeps its data in the SGL
+          # folder: the log file is attached before any window opens, so this holds even if a VM's
+          # GPU refuses to create one - and `--version` would prove nothing, because it exits before
+          # the settings folder is touched. Upstream's folder must never appear.
+          sgldata="$HOME/Library/Application Support/PhotoCraftSGL"
+          "$installed/Contents/MacOS/PhotoCraft" >/dev/null 2>&1 &
+          app_pid=$!
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if [[ -f "$sgldata/logs/photocraft.log" ]]; then break; fi
+            sleep 5
+          done
+          kill "$app_pid" 2>/dev/null || true
+          wait "$app_pid" 2>/dev/null || true
+          if [[ ! -f "$sgldata/logs/photocraft.log" ]]; then
+            echo "error: the installed app never wrote $sgldata/logs/photocraft.log; its settings folder is not this edition's" >&2
+            exit 1
+          fi
+          test ! -e "$HOME/Library/Application Support/Photocraft"
           mkdir downloads
           cp dist/release/*-macos-universal.{dmg,zip} downloads/
-          echo 'PhotoCraft with SGL Tools. Ad-hoc signed, not notarized. Gatekeeper may block downloaded copies.' > downloads/README.txt
+          cat > downloads/README.txt <<'TXT'
+          PhotoCraft with SGL Tools - macOS universal (Apple silicon and Intel). Unofficial build,
+          ad-hoc signed, not notarized: Gatekeeper may block a downloaded copy.
+
+          It is a separate application from PhotoCraft: its own bundle identifier, its own settings
+          in ~/Library/Application Support/PhotoCraftSGL, and its own "Open With" entry for
+          documents. It never replaces PhotoCraft or changes any default application.
+          TXT
+          cat > downloads/PROVENANCE.txt <<EOF
+          application source: $GITHUB_SHA (this run's commit; source and packaging in one tree)
+          craft-fonts: b076417b5880bd4154bd22f00695b1d28c6bea83
+          rust: $(rustc --version) (aarch64-apple-darwin + x86_64-apple-darwin, lipo universal)
+          edition: SGL (PHOTOCRAFT_SGL_EDITION + SGL_EDITION set as job env)
+          signing: ${MACOS_SIGN_IDENTITY:-ad-hoc}
+          runner: macos-15, macOS $(sw_vers -productVersion)
+          EOF
       - name: Linux x86-64 AppImage and tarball
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config clang libclang-dev libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev libasound2-dev libudev-dev libvulkan1 desktop-file-utils squashfs-tools
+          sudo apt-get install -y build-essential cmake pkg-config clang libclang-dev libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev libasound2-dev libudev-dev libvulkan1 desktop-file-utils squashfs-tools xvfb
           bash packaging/linux/package.sh --formats "appimage tar"
           mkdir downloads
           cp dist/release/*.AppImage dist/release/*.tar.gz downloads/
-          echo 'PhotoCraft with SGL Tools. Make the AppImage executable before launching.' > downloads/README.txt
-          appimage=("$PWD"/downloads/*.AppImage)
-          archive=("$PWD"/downloads/*.tar.gz)
+          appimage=("$PWD"/downloads/photocraft-sgl-*-linux-x86_64.AppImage)
+          archive=("$PWD"/downloads/photocraft-sgl-*-linux-x86_64.tar.gz)
+          # The SGL names prove the edition switch applied to the packaging; upstream-named
+          # artifacts here would mean SGL_EDITION never reached package.sh.
+          test "${#appimage[@]}" = 1 && test "${#archive[@]}" = 1
+          workspace="$PWD"
           cd "$RUNNER_TEMP"
           "${appimage[0]}" --appimage-extract
           file squashfs-root/usr/bin/photocraft | grep -F 'x86-64'
           ldd squashfs-root/usr/bin/photocraft | tee libraries.txt
           ! grep -F 'not found' libraries.txt
           squashfs-root/AppRun --version
+          # The launcher identity inside the AppImage: this edition's desktop id, icon name and
+          # metainfo component, AppRun's integration id pointed at them, and none of upstream's
+          # registered names (including the shared mime package, which stays upstream's alone).
+          test -f squashfs-root/ai.storyteller.photocraft.sgl.desktop
+          test -f squashfs-root/ai.storyteller.photocraft.sgl.png
+          test -f squashfs-root/usr/share/applications/ai.storyteller.photocraft.sgl.desktop
+          test -f squashfs-root/usr/share/icons/hicolor/256x256/apps/ai.storyteller.photocraft.sgl.png
+          test -f squashfs-root/usr/share/metainfo/ai.storyteller.photocraft.sgl.metainfo.xml
+          test ! -e squashfs-root/usr/share/applications/ai.storyteller.photocraft.desktop
+          test ! -e squashfs-root/usr/share/mime/packages/ai.storyteller.photocraft.xml
+          grep -Fx 'DESK_ID=ai.storyteller.photocraft.sgl' squashfs-root/AppRun
+          # Run-time proof that the *binary* keeps its data in this edition's folder: the log file
+          # is attached before any window opens, so this holds even if the runner's GPU is unusable.
+          # A throwaway HOME keeps the check about the names: upstream's folder must never appear.
+          fake_home="$RUNNER_TEMP/fake-home"
+          mkdir -p "$fake_home"
+          HOME="$fake_home" timeout 120 xvfb-run -a ./squashfs-root/AppRun >/dev/null 2>&1 || true
+          if [[ ! -f "$fake_home/.config/photocraft-sgl/logs/photocraft.log" ]]; then
+            echo "error: the app never wrote ~/.config/photocraft-sgl/logs/photocraft.log; its settings folder is not this edition's" >&2
+            exit 1
+          fi
+          test ! -e "$fake_home/.config/photocraft"
           tar -xzf "${archive[0]}"
-          cli=(photocraft-*/bin/photocraft-cli)
+          cli=(photocraft-sgl-*/bin/photocraft-cli)
           "${cli[0]}" --version
+          tree=(photocraft-sgl-*)
+          test -f "${tree[0]}/usr/share/applications/ai.storyteller.photocraft.sgl.desktop"
+          test -f "${tree[0]}/usr/share/metainfo/ai.storyteller.photocraft.sgl.metainfo.xml"
+          test ! -e "${tree[0]}/usr/share/mime/packages/ai.storyteller.photocraft.xml"
+          cat > "$workspace/downloads/README.txt" <<'TXT'
+          PhotoCraft with SGL Tools - Linux x86-64. Unofficial build.
+
+          AppImage: make it executable and run it. On first run it registers its own launcher
+          entry and icons (named ai.storyteller.photocraft.sgl) beside an installed PhotoCraft's,
+          never over them; set PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1 to skip that.
+          tar.gz: an unpacked FHS tree; copy it anywhere.
+
+          Both are separate from PhotoCraft: their own settings in ~/.config/photocraft-sgl
+          (recovery files in ~/.local/state/photocraft-sgl), their own single-instance files, and
+          an "Open With" entry only - no default application is ever changed.
+          TXT
+          cat > "$workspace/downloads/PROVENANCE.txt" <<EOF
+          application source: $GITHUB_SHA (this run's commit; source and packaging in one tree)
+          craft-fonts: b076417b5880bd4154bd22f00695b1d28c6bea83
+          rust: $(rustc --version) (x86_64-unknown-linux-gnu, Ubuntu 22.04 / glibc 2.35)
+          edition: SGL (PHOTOCRAFT_SGL_EDITION + SGL_EDITION set as job env)
+          appimagetool 1.9.1, type2-runtime 20251108 (pinned, digest-verified)
+          EOF
+      - name: Install the pinned WiX toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Same pinned toolchain the packaging-lint job uses for the installer policy checks.
+          $tools = Join-Path $env:RUNNER_TEMP 'sgl-windows-wix'
+          dotnet tool install --tool-path $tools wix --version 5.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed.' }
+          $tools >> $env:GITHUB_PATH
+          foreach ($extension in @('UI', 'Util')) {
+            & (Join-Path $tools 'wix.exe') extension add -g "WixToolset.$extension.wixext/5.0.2"
+            if ($LASTEXITCODE -ne 0) { throw "WiX extension $extension installation failed." }
+          }
+      - name: Windows x64 MSI and portable ZIP (independent SGL identity)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # One compilation feeds the MSI, the portable ZIP and the symbols; -Edition sgl selects
+          # the SGL WiX identity and sets PHOTOCRAFT_SGL_EDITION for cargo (the job env already
+          # sets it; the script does too so a local run gets the same binary either way).
+          ./packaging/windows/package.ps1 -Arch x64 -Edition sgl
+      - name: Install, run and uninstall the MSI on the runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # What the installed product actually does, on a runner: a silent per-user install, a brief
+          # run, the settings-folder assertion, and an uninstall. The upstream app is *not* installed
+          # here, so this proves this product's own behaviour - never claim it as proof of
+          # side-by-side coexistence with a live upstream install, which stays a manual test.
+          $ErrorActionPreference = 'Stop'
+          $msi = (Get-ChildItem dist\release\photocraft-sgl-*-windows-x64.msi)[0].FullName
+          $zip = (Get-ChildItem dist\release\photocraft-sgl-*-windows-x64-portable.zip)[0].FullName
+          $installLog = Join-Path $env:RUNNER_TEMP 'msi-install.log'
+          # "Only for me" scope, the default a user gets: ALLUSERS="" is how msiexec reads an empty
+          # value, the documented way to select per-user scope for a dual-scope package.
+          $install = Start-Process msiexec.exe -ArgumentList ('/i "' + $msi + '" /qn /l*v "' + $installLog + '" ALLUSERS="" MSIINSTALLPERUSER=1') -Wait -PassThru
+          if ($install.ExitCode -ne 0) {
+            Get-Content $installLog -Tail 80
+            throw "silent per-user install failed with exit code $($install.ExitCode)"
+          }
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\ArtCraft\PhotoCraft with SGL Tools'
+          $exe = Join-Path $dir 'photocraft.exe'
+          if (-not (Test-Path $exe)) { throw "the install put no photocraft.exe in $dir" }
+          # The portable ZIP holds its files at the archive root (#7699) - portable mode needs
+          # portable.txt beside the exe wherever it is extracted - so this is also a layout check.
+          $portableDir = Join-Path $env:RUNNER_TEMP 'portable'
+          Expand-Archive -Path $zip -DestinationPath $portableDir -Force
+          $zipExe = Join-Path $portableDir 'photocraft.exe'
+          if (-not (Test-Path $zipExe)) { throw 'the portable ZIP does not hold photocraft.exe at its root' }
+          if (-not (Test-Path (Join-Path $portableDir 'portable.txt'))) { throw 'the portable ZIP lost portable.txt' }
+          # One compilation feeds both artifacts; a hash difference would mean two binaries shipped.
+          if ((Get-FileHash $exe).Hash -ne (Get-FileHash $zipExe).Hash) {
+            throw 'the installed photocraft.exe and the portable ZIP photocraft.exe differ'
+          }
+          # A brief real launch proves the compiled-in settings folder. The log file is attached
+          # before the window opens, so a runner whose GPU cannot make one still proves the folder -
+          # and --version would prove nothing, because it exits before the folder is touched.
+          function Wait-For-Log([string] $path) {
+            $deadline = (Get-Date).AddMinutes(2)
+            while ((Get-Date) -lt $deadline -and -not (Test-Path $path)) { Start-Sleep -Seconds 3 }
+            Test-Path $path
+          }
+          $app = Start-Process $exe -PassThru
+          $settingsLog = Join-Path $env:APPDATA 'PhotoCraftSGL\logs\photocraft.log'
+          $settingsOk = Wait-For-Log $settingsLog
+          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+          $app.WaitForExit()
+          if (-not $settingsOk) { throw "the installed app never wrote $settingsLog; its settings folder is not this edition's" }
+          if (Test-Path (Join-Path $env:APPDATA 'Photocraft')) {
+            throw 'the installed app wrote upstream settings folder %APPDATA%\Photocraft'
+          }
+          # The portable copy must keep doing what it always did: its data beside the exe.
+          $port = Start-Process $zipExe -PassThru
+          $portableLog = Join-Path $portableDir 'PhotoCraftData\logs\photocraft.log'
+          $portableOk = Wait-For-Log $portableLog
+          Stop-Process -Id $port.Id -Force -ErrorAction SilentlyContinue
+          $port.WaitForExit()
+          if (-not $portableOk) { throw "the portable copy never wrote $portableLog; portable mode changed" }
+          # Uninstall: the product removes what it installed, leaving nothing to mistake for an
+          # orphaned install. (Its settings folder stays, as Windows Installer convention has it.)
+          $uninstall = Start-Process msiexec.exe -ArgumentList ('/x "' + $msi + '" /qn') -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "silent uninstall failed with exit code $($uninstall.ExitCode)" }
+          if (Test-Path $exe) { throw 'the uninstall left photocraft.exe behind' }
+      - name: Collect the Windows distribution files
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          msi=(dist/release/photocraft-sgl-*-windows-x64.msi)
+          zip=(dist/release/photocraft-sgl-*-windows-x64-portable.zip)
+          symbols=(dist/release/photocraft-sgl-*-windows-x64-symbols.zip)
+          test "${#msi[@]}" = 1 && test "${#zip[@]}" = 1 && test "${#symbols[@]}" = 1
+          version=${msi[0]#dist/release/photocraft-sgl-}
+          version=${version%-windows-x64.msi}
+          rustc_version=$(rustc --version)
+          mkdir downloads
+          cp "$msi" "downloads/PhotoCraft-with-SGL-Tools-v$version-Windows-x64-Setup.msi"
+          cp "$zip" "downloads/PhotoCraft-with-SGL-Tools-v$version-Windows-x64-Portable.zip"
+          cp "$symbols" downloads/
+          cat > downloads/README.txt <<'TXT'
+          PhotoCraft with SGL Tools - Windows x64. Unofficial build, not code-signed.
+
+          Setup (MSI): installs "PhotoCraft with SGL Tools" as a separate app beside an
+          upstream PhotoCraft. It never replaces, upgrades or removes an existing PhotoCraft
+          install, and it does not change the default app for any file type; it appears under
+          "Open with" instead. It keeps its own settings in %APPDATA%\PhotoCraftSGL (crash
+          recovery in %LOCALAPPDATA%\PhotoCraftSGL), so an installed upstream PhotoCraft keeps
+          %APPDATA%\Photocraft and its own running copy: neither one forwards your documents
+          to the other. Default scope is "Only for me" (no administrator needed); "Everyone"
+          offers a machine-wide install. Uninstall from Windows Settings - Apps.
+
+          Portable (ZIP): extract anywhere and run photocraft.exe. The portable.txt next to
+          it keeps settings in a PhotoCraftData folder beside the exe, as always.
+
+          SmartScreen: the build is not code-signed, so a downloaded copy shows "unknown
+          publisher" on first run; choose "More info" then "Run anyway".
+          The photocraft-sgl-*-symbols.zip holds PDB debug files for profilers; it is a CI
+          artifact, not needed to run the app.
+          TXT
+          cat > downloads/PROVENANCE.txt <<EOF
+          application source: $GITHUB_SHA (this run's commit; source and packaging in one tree)
+          craft-fonts: b076417b5880bd4154bd22f00695b1d28c6bea83
+          rust: $rustc_version (x86_64-pc-windows-msvc, static CRT)
+          edition: SGL (PHOTOCRAFT_SGL_EDITION + SGL_EDITION set as job env, and by package.ps1)
+          wix: 5.0.2 (WixToolset.UI.wixext, WixToolset.Util.wixext)
+          verified on the runner: install-policy contract, ICE50, PE machine/subsystem, MSI-vs-ZIP
+          binary hash, per-user install, settings folder, brief run, uninstall
+          runner: $ImageOS
+          EOF
       - name: Verify checksums and sizes
+        if: runner.os != 'Windows'
         working-directory: downloads
         run: |
           shasum -a 256 photocraft-* | tee SHA256SUMS.txt
           shasum -a 256 -c SHA256SUMS.txt
           wc -c photocraft-*
+      - name: Verify checksums and sizes (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: downloads
+        run: |
+          set -euo pipefail
+          sha256sum PhotoCraft-with-SGL-Tools-v*-Windows-x64-Setup.msi PhotoCraft-with-SGL-Tools-v*-Windows-x64-Portable.zip photocraft-sgl-*-symbols.zip | tee SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          wc -c PhotoCraft-with-SGL-Tools-v*-Windows-x64-Setup.msi PhotoCraft-with-SGL-Tools-v*-Windows-x64-Portable.zip photocraft-sgl-*-symbols.zip
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: PhotoCraft-with-SGL-Tools-${{ matrix.os }}
