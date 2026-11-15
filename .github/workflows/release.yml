@@ -6,7 +6,33 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version override for a test run, e.g. 0.2.0-rc.1 (empty: Cargo.toml)"
+        description: "Version override for a test run, e.g. 0.2.0-rc.1 (empty: Cargo.toml). On development/sgl-tools, 'macos-only' or 'windows-only' instead restricts which SGL packages are built."
+        type: string
+        default: ""
+      # SGL only, and only a pass-through: sgl-packages.yml is not on the default branch, so it
+      # cannot be dispatched by name - this workflow is the entry point for its two stages.
+      sgl-mode:
+        description: "SGL (development/sgl-tools): build-and-verify compiles and packages, then installs and runs each package. verify-only compiles nothing and re-runs the checks against an earlier run's packages."
+        type: choice
+        default: build-and-verify
+        options:
+          - build-and-verify
+          - verify-only
+      sgl-platforms:
+        description: "SGL: which platform legs run (all, macos, linux or windows). For verify-only this must be a platform the build run produced."
+        type: choice
+        default: all
+        options:
+          - all
+          - macos
+          - linux
+          - windows
+      sgl-build-run-id:
+        description: "SGL verify-only only: the run id whose sgl-build-unverified-<os> artifact to verify."
+        type: string
+        default: ""
+      sgl-source-commit:
+        description: "SGL verify-only only: the commit those packages were built from; each leg stops unless its own BUILD-META.txt names exactly this commit."
         type: string
         default: ""
 
@@ -21,11 +47,13 @@ concurrency:
 jobs:
   # Regenerates contributors/contributors.json for the release commit; every build bundles it.
   credits:
+    if: github.ref != 'refs/heads/development/sgl-tools'
     permissions:
       contents: read
       pull-requests: read
     uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@main
   release:
+    if: github.ref != 'refs/heads/development/sgl-tools'
     needs: credits
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
@@ -51,3 +79,20 @@ jobs:
       AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
       AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
       LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+
+  sgl-artifacts:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/development/sgl-tools'
+    permissions:
+      contents: read
+      # GITHUB_TOKEN permissions can be maintained or reduced through a reusable-workflow chain,
+      # never elevated: the verify stage of that workflow downloads a build run's artifacts with gh,
+      # which needs actions: read granted here as well or the download is refused.
+      actions: read
+    uses: ./.github/workflows/sgl-packages.yml
+    with:
+      macos-only: ${{ inputs.version == 'macos-only' }}
+      windows-only: ${{ inputs.version == 'windows-only' }}
+      mode: ${{ inputs.sgl-mode }}
+      platforms: ${{ inputs.sgl-platforms }}
+      build-run-id: ${{ inputs.sgl-build-run-id }}
+      source-commit: ${{ inputs.sgl-source-commit }}

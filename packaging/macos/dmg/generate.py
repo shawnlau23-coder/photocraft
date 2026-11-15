@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Regenerate background.tiff and dmg-layout.DS_Store for the macOS DMG window (see README.md here).
+"""Regenerate background.tiff and the two dmg-layout*.DS_Store files for the macOS DMG window
+(the "PhotoCraft" and "PhotoCraft with SGL Tools" volumes; see README.md here).
 
 Needs resvg on PATH and:
     pip install 'pillow>=12' ds_store==1.3.3 mac_alias==2.2.3
@@ -23,13 +24,18 @@ from PIL import Image, ImageCms
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Keep in sync with package.sh (volume name) and README.md (layout).
+# Keep in sync with package.sh (volume name, bundle folder name) and README.md (layout).
 VOLUME = "PhotoCraft"
 WIDTH, HEIGHT = 660, 400  # window content, pt; the background's 1x size
 TITLE_BAR = 32
 ICON_SIZE = 128
 PALETTE = 16  # colours in background.tiff
 ICONS = {"PhotoCraft.app": (326, 205), "Applications": (574, 205)}
+# The "PhotoCraft with SGL Tools" edition (SGL_EDITION in package.sh): the same window over its own
+# volume and app folder. Its background alias names that volume, so the upstream .DS_Store can never
+# stand in for this one; package.sh skips the layout (Finder's default) until this file exists.
+VOLUME_SGL = "PhotoCraft with SGL Tools"
+ICONS_SGL = {"PhotoCraft with SGL Tools.app": (326, 205), "Applications": (574, 205)}
 # A fixed date for the alias and the colour profile. Finder never matches it against the image
 # (each build is a new volume): it finds the background by volume name and path.
 FIXED_DATE = datetime.datetime(2026, 10, 8, tzinfo=datetime.timezone.utc)
@@ -98,22 +104,22 @@ def write_tiff(svg, out):
                 f.write(bytes(1))
 
 
-def background_alias():
+def background_alias(volume):
     # What Finder stores for /.background/background.tiff on the volume, minus anything about the
     # machine (dmgbuild writes the same kind of alias from a mounted image). Disk type 5 (ejectable),
     # the volume flags and the folder/file ids (25, 26) are what Finder wrote on a test image; the ids
     # are only hints, as the volume's creation date.
-    volume = VolumeInfo(VOLUME, FIXED_DATE, b"H+", 5, 0x0D02, b"\0\0")
-    volume.posix_path = f"/Volumes/{VOLUME}"
+    info = VolumeInfo(volume, FIXED_DATE, b"H+", 5, 0x0D02, b"\0\0")
+    info.posix_path = f"/Volumes/{volume}"
     target = TargetInfo(0, "background.tiff", 25, 26, FIXED_DATE, b"\0\0\0\0", b"\0\0\0\0")
     target.folder_name = ".background"
     target.cnid_path = [25]
-    target.carbon_path = f"{VOLUME}:.background:\0background.tiff"
+    target.carbon_path = f"{volume}:.background:\0background.tiff"
     target.posix_path = "/.background/background.tiff"
-    return Alias(volume=volume, target=target).to_bytes()
+    return Alias(volume=info, target=target).to_bytes()
 
 
-def write_ds_store(out):
+def write_ds_store(out, volume, icons):
     if os.path.exists(out):
         os.remove(out)
     with DSStore.open(out, "w+") as d:
@@ -128,7 +134,7 @@ def write_ds_store(out):
         d["."]["icvp"] = {
             "viewOptionsVersion": 1,
             "backgroundType": 2,
-            "backgroundImageAlias": background_alias(),
+            "backgroundImageAlias": background_alias(volume),
             "backgroundColorRed": 1.0,
             "backgroundColorGreen": 1.0,
             "backgroundColorBlue": 1.0,
@@ -143,7 +149,7 @@ def write_ds_store(out):
             "iconSize": float(ICON_SIZE),
         }
         d["."]["vSrn"] = ("long", 1)
-        for name, pos in ICONS.items():
+        for name, pos in icons.items():
             d[name]["Iloc"] = pos
 
 
@@ -151,7 +157,10 @@ def main():
     if not shutil.which("resvg"):
         sys.exit("error: resvg not found (brew install resvg / cargo install resvg --locked)")
     write_tiff(os.path.join(HERE, "background.svg"), os.path.join(HERE, "background.tiff"))
-    write_ds_store(os.path.join(HERE, "dmg-layout.DS_Store"))
+    # One background for both editions (the artwork names no product); one window layout per
+    # edition, because each alias carries its own volume and app folder name.
+    write_ds_store(os.path.join(HERE, "dmg-layout.DS_Store"), VOLUME, ICONS)
+    write_ds_store(os.path.join(HERE, "dmg-layout.sgl.DS_Store"), VOLUME_SGL, ICONS_SGL)
 
 
 if __name__ == "__main__":

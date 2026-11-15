@@ -35,14 +35,57 @@ fn no_marker_uses_the_platform_dir() {
     assert_eq!(Some(dir.clone()), platform_dir(&env));
     assert!(!dir.starts_with(&exe));
     assert!(!exe.join(PORTABLE_DATA_DIR).exists(), "no portable folder without a marker");
-    // The convention per platform.
+    // The convention per platform, under this build's edition folder name (the names themselves
+    // are pinned by `each_edition_gets_its_own_folder_name`).
     if cfg!(target_os = "macos") {
-        assert_eq!(dir, root.join("home/Library/Application Support/Photocraft"));
+        assert_eq!(dir, root.join("home/Library/Application Support").join(data_dir_name(SGL_EDITION)));
     } else if cfg!(windows) {
-        assert_eq!(dir, root.join("appdata").join("Photocraft"));
+        assert_eq!(dir, root.join("appdata").join(data_dir_name(SGL_EDITION)));
     } else {
-        assert_eq!(dir, root.join("home/.config/photocraft"));
+        assert_eq!(dir, root.join("home/.config").join(data_dir_name(SGL_EDITION)));
     }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The two products a user can install side by side are told apart by this folder name: settings,
+/// presets, autosaves and the single-instance lock and hand-off files all hang off it, so the
+/// upstream names stay untouched and the SGL build ([`SGL_EDITION`]) gets names of its own.
+#[test]
+fn each_edition_gets_its_own_folder_name() {
+    let (vendor, sgl) = if cfg!(windows) || cfg!(target_os = "macos") { ("Photocraft", "PhotoCraftSGL") } else { ("photocraft", "photocraft-sgl") };
+    assert_eq!(data_dir_name(false), vendor, "upstream keeps the folder people already have");
+    assert_eq!(data_dir_name(true), sgl);
+    assert_ne!(data_dir_name(false), data_dir_name(true), "one folder cannot serve both products");
+    // Legal folder names everywhere: no separator, no trailing dot or space, and nothing Windows
+    // reserves (a name like `aux` would be refused by the filesystem).
+    for name in [data_dir_name(false), data_dir_name(true)] {
+        assert!(!name.is_empty() && !name.contains('/') && !name.contains('\\'), "{name}");
+        assert!(!name.ends_with(['.', ' ']), "{name}");
+        assert!(!matches!(name.to_ascii_lowercase().as_str(), "con" | "prn" | "aux" | "nul" | "com1" | "lpt1"), "{name}");
+    }
+    // And the flag really decides the resolved path, not just the helper.
+    let root = temp("edition");
+    let dir = platform_dir(&fake_home(&root)).unwrap();
+    assert_eq!(dir.file_name().and_then(|n| n.to_str()), Some(data_dir_name(SGL_EDITION)));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The recovery folder carries the same edition name even though it hangs off a different base
+/// folder (`%LOCALAPPDATA%` on Windows, `$XDG_STATE_HOME` on Linux, the settings folder on macOS).
+#[test]
+fn the_recovery_folder_takes_the_edition_name_too() {
+    let root = temp("edition-recovery");
+    let env = env_of(&[
+        ("HOME", &root.join("home")),
+        ("APPDATA", &root.join("appdata")),
+        ("LOCALAPPDATA", &root.join("local")),
+        ("XDG_STATE_HOME", &root.join("state")),
+    ]);
+    let data = resolve(&env, None);
+    assert_eq!(data.mode, Mode::Platform);
+    let recovery = resolve_recovery(&data, &env).unwrap();
+    assert_eq!(recovery.file_name().and_then(|n| n.to_str()), Some(RECOVERY));
+    assert_eq!(recovery.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()), Some(data_dir_name(SGL_EDITION)));
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -120,7 +163,7 @@ fn autosaves_stay_out_of_the_roaming_profile() {
     let local = root.join("local");
     let env = env_of(&[("LOCALAPPDATA", &local)]);
     let platform = DataDir { dir: Some(settings.clone()), mode: Mode::Platform, warning: None };
-    let expected = if cfg!(windows) { local.join("Photocraft").join("Recovery") } else { settings.join("Recovery") };
+    let expected = if cfg!(windows) { local.join(data_dir_name(SGL_EDITION)).join("Recovery") } else { settings.join("Recovery") };
     assert_eq!(resolve_recovery(&platform, &env), Some(expected));
     for mode in [Mode::Override, Mode::Portable] {
         let d = DataDir { dir: Some(settings.clone()), mode, warning: None };
@@ -145,10 +188,11 @@ fn autosaves_go_to_the_xdg_state_folder() {
     let home = root.join("home");
     let state = root.join("state");
     let platform = DataDir { dir: Some(settings.clone()), mode: Mode::Platform, warning: None };
+    let name = data_dir_name(SGL_EDITION);
     let xdg = !cfg!(windows) && !cfg!(target_os = "macos");
     let expect = |xdg_path: PathBuf| Some(if xdg { xdg_path } else { settings.join("Recovery") });
-    assert_eq!(resolve_recovery(&platform, env_of(&[("XDG_STATE_HOME", &state), ("HOME", &home)])), expect(state.join("photocraft").join("Recovery")));
-    let default = home.join(".local").join("state").join("photocraft").join("Recovery");
+    assert_eq!(resolve_recovery(&platform, env_of(&[("XDG_STATE_HOME", &state), ("HOME", &home)])), expect(state.join(name).join("Recovery")));
+    let default = home.join(".local").join("state").join(name).join("Recovery");
     assert_eq!(resolve_recovery(&platform, env_of(&[("HOME", &home)])), expect(default.clone()));
     let relative = PathBuf::from("relative/state");
     assert_eq!(resolve_recovery(&platform, env_of(&[("XDG_STATE_HOME", &relative), ("HOME", &home)])), expect(default.clone()));

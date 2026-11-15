@@ -1,0 +1,27 @@
+[Desktop Entry]
+# The "PhotoCraft with SGL Tools" edition of ai.storyteller.photocraft.desktop (package.sh selects
+# it when SGL_EDITION is set). Everything that identifies the launcher changes: the file name (its
+# desktop id), Name, Icon and StartupWMClass. Menus then show the two products separately, and the
+# window manager matches each window to its own entry and icon. StartupWMClass must equal the app id
+# the binary was compiled with (crates/ui-egui/src/os_window.rs); the_desktop_entry_names_the_window_class
+# in apps/photocraft/src/main.rs checks that pair. Everything else is upstream's on purpose: the same
+# binary names in Exec/TryExec, the same categories and keywords. MimeType= only declares what this
+# app can open, so it appears in "Open With"; it never changes a default application (that is user
+# configuration), and the shared mime package stays upstream's alone (see package.sh).
+Type=Application
+Name=PhotoCraft with SGL Tools
+GenericName=Image Editor
+Comment=Edit photos and layered PSD documents
+Exec=photocraft %F
+TryExec=photocraft
+Icon=ai.storyteller.photocraft.sgl
+Terminal=false
+# The native runner does not complete desktop startup-notification handshakes.
+StartupNotify=false
+StartupWMClass=ai.storyteller.photocraft.sgl
+Categories=Graphics;2DGraphics;RasterGraphics;Photography;
+Keywords=photo;image;editor;psd;layers;retouch;paint;
+MimeType=application/x-photocraft;image/x-paintnet;image/openraster;application/x-krita;image/vnd.adobe.photoshop;image/x-psd;image/x-psb;image/png;image/jpeg;image/tiff;image/webp;image/gif;image/bmp;image/x-tga;image/x-icon;image/vnd.microsoft.icon;image/x-portable-anymap;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/x-exr;image/vnd.radiance;image/avif;image/qoi;
+# AppRun registers the desktop entry and icons itself (#593); tell external
+# AppImage integrators (AppImageLauncher, appimaged) not to add a duplicate (#3623).
+X-AppImage-Integrate=false

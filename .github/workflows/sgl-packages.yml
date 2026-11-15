@@ -1,0 +1,1126 @@
+name: SGL packages
+# Two stages over one approved commit:
+#   build  - compiles PhotoCraft, packages it, writes the bundle's metadata and checksums, uploads.
+#   verify - on a fresh runner, downloads that bundle and installs/inspects/runs what it contains.
+# The split exists because a corrected *test* should not need a recompile: the last run compiled all
+# three platforms and then lost every artifact to three runtime-proof assertions. With the stages
+# separate, the packages survive the run (the build stage always uploads them, labelled unverified)
+# and only the verify stage has to be re-run against them (mode=verify-only).
+on:
+  workflow_call:
+    inputs:
+      macos-only:
+        type: boolean
+        default: false
+      windows-only:
+        type: boolean
+        default: false
+      mode:
+        type: string
+        default: build-and-verify
+      platforms:
+        type: string
+        default: all
+      build-run-id:
+        type: string
+        default: ''
+      source-commit:
+        type: string
+        default: ''
+  # Dispatchable in its own right, which is how a verification-only re-run is started: a reusable
+  # workflow can also be dispatched directly, so there is one definition of both stages rather than
+  # a second workflow file that could drift from the first.
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "build-and-verify: compile, package, then install and run each package. verify-only: compile nothing - download an earlier run's packages and run only the install/identity/signing/runtime checks."
+        type: choice
+        default: build-and-verify
+        options:
+          - build-and-verify
+          - verify-only
+      platforms:
+        description: "Which platform legs run. For verify-only, name a platform that the build run actually produced; the plan job lists what is available if you guess wrong."
+        type: choice
+        default: all
+        options:
+          - all
+          - macos
+          - linux
+          - windows
+      build-run-id:
+        description: "verify-only only: the run id whose sgl-build-unverified-<os> artifact to verify (gh run list --workflow=release.yml)."
+        type: string
+        default: ''
+      source-commit:
+        description: "verify-only only: the commit those packages were built from. Each leg stops unless its own BUILD-META.txt names exactly this commit."
+        type: string
+        default: ''
+permissions:
+  contents: read
+  # The verify stage downloads artifacts from another run and every stage lists them, so the Actions
+  # read scope is needed; nothing here writes to the repository or publishes anything.
+  actions: read
+
+jobs:
+  # Resolves the mode, the platform list and the pinned commit once, so the two stages cannot drift
+  # apart and so a verify-only request with a bad run id, a wrong commit or a platform that was
+  # never built stops here rather than in three separate legs.
+  plan:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      os: ${{ steps.pick.outputs.os }}
+      build-run: ${{ steps.pick.outputs.build-run }}
+      source-commit: ${{ steps.pick.outputs.source-commit }}
+    steps:
+      - name: Resolve the stage, platforms and pinned commit
+        id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode='${{ inputs.mode }}'
+          platforms='${{ inputs.platforms }}'
+          build_run='${{ inputs.build-run-id }}'
+          want_commit='${{ inputs.source-commit }}'
+          case "$mode" in
+            build-and-verify) build_run='${{ github.run_id }}' ;;
+            verify-only)
+              if [[ ! "$build_run" =~ ^[0-9]+$ ]]; then
+                echo 'error: mode=verify-only needs build-run-id: the run whose packages to verify.' >&2
+                echo '       List recent runs with: gh run list --repo "$GITHUB_REPOSITORY" --workflow=release.yml' >&2
+                exit 1
+              fi
+              if [[ -z "$want_commit" ]]; then
+                echo 'error: mode=verify-only needs source-commit: the commit those packages were built from.' >&2
+                echo '       That is the commit the build run checked out; the run listing shows it.' >&2
+                exit 1
+              fi
+              ;;
+            *) echo "error: unknown mode '$mode' (build-and-verify or verify-only)" >&2; exit 1 ;;
+          esac
+          case "$platforms" in
+            all) runners='macos-15 ubuntu-22.04 windows-latest' ;;
+            macos) runners='macos-15' ;;
+            linux) runners='ubuntu-22.04' ;;
+            windows) runners='windows-latest' ;;
+            *) echo "error: unknown platforms '$platforms' (all, macos, linux or windows)" >&2; exit 1 ;;
+          esac
+          # The Release workflow's two older switches keep working unchanged; an explicit
+          # platforms value wins over them.
+          if [[ "$platforms" == all ]]; then
+            if [[ '${{ inputs.macos-only }}' == true ]]; then runners='macos-15'; fi
+            if [[ '${{ inputs.windows-only }}' == true ]]; then runners='windows-latest'; fi
+          fi
+          # The runner names are the matrix and, for verify-only, the artifact names to look for, so
+          # they are written once here and turned into JSON rather than parsed back out of it.
+          os='['
+          separator=''
+          for runner_os in $runners; do
+            os+="${separator}\"$runner_os\""
+            separator=','
+          done
+          os+=']'
+          echo "platforms: $runners"
+          echo "os=$os" >> "$GITHUB_OUTPUT"
+          echo "build-run=$build_run" >> "$GITHUB_OUTPUT"
+          echo "source-commit=$want_commit" >> "$GITHUB_OUTPUT"
+          if [[ -z "$want_commit" ]]; then want_commit='${{ github.sha }}'; fi
+          {
+            echo "| stage | platforms | packages from | verification logic |"
+            echo '| --- | --- | --- | --- |'
+            echo "| $mode | $os | run $build_run, commit $want_commit | ${{ github.sha }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$mode" == verify-only ]]; then
+            # Name the run before three legs each chase it: same repository, same commit as claimed,
+            # and the bundle for every requested platform really is there.
+            head_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run" --jq .head_sha)"
+            status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run" --jq .status)"
+            echo "packages come from run $build_run (conclusion status: $status), built from $head_sha"
+            if [[ "$head_sha" != "$want_commit" ]]; then
+              echo "error: run $build_run built $head_sha, but source-commit says $want_commit." >&2
+              echo '       Pass the commit that run checked out, or build the packages you mean.' >&2
+              exit 1
+            fi
+            # --paginate hands the whole page object to --jq, not each item, so the filter must name
+            # the wrapper key: '.[].name' fails this endpoint with "expected an object but got: array"
+            # (checked against the real API). This listing is what turns a mistyped run id or a
+            # platform that was never built into one readable message instead of three confused legs.
+            available="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run/artifacts" --paginate --jq '.artifacts[].name')"
+            missing=0
+            for runner_os in $runners; do
+              name="sgl-build-unverified-$runner_os"
+              if ! grep -qxF "$name" <<<"$available"; then
+                echo "error: run $build_run has no artifact named $name." >&2
+                missing=1
+              fi
+            done
+            if [[ "$missing" == 1 ]]; then
+              echo "  artifacts in run $build_run:" >&2
+              sed 's/^/    /' <<<"$available" >&2
+              echo '  Verify only the platforms that were built (platforms=macos|linux|windows), or run a build that covers the rest.' >&2
+              exit 1
+            fi
+            echo "  every requested platform's bundle is present in run $build_run" >> "$GITHUB_STEP_SUMMARY"
+          fi
+  build:
+    needs: plan
+    if: ${{ inputs.mode != 'verify-only' }}
+    strategy:
+      fail-fast: false
+      # The plan job resolved the platform list once, so the build and verify legs of one run are the
+      # same platforms. macos-only: macOS only; windows-only: the Windows job alone; otherwise all
+      # three in one run - one run of one commit, so the three artifacts share their source.
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.os) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CRAFT_FONTS_REQUIRED: '1'
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      RUSTUP_TOOLCHAIN: '1.99.1'
+      # The one place the "PhotoCraft with SGL Tools" edition is chosen, for all three platforms.
+      # PHOTOCRAFT_SGL_EDITION is read at compile time (option_env!) by apps/photocraft/src/app_dirs.rs
+      # and crates/ui-egui/src/os_window.rs: the settings/recovery folders, the single-instance lock
+      # and the window/app id become this product's own, so an installed SGL copy and an installed
+      # upstream copy share neither preferences nor document hand-off. SGL_EDITION is read by the
+      # packaging (bundle identifier and plist, DMG volume name, desktop/metainfo/icon ids, and via
+      # package.ps1 -Edition sgl the WiX identity). With either unset, that platform builds exactly
+      # upstream's artifact.
+      PHOTOCRAFT_SGL_EDITION: '1'
+      SGL_EDITION: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # The application source and the packaging now live in the same approved commit, so this
+          # run's own commit is the build input and there is no separate pin to check out - and no
+          # overlay to patch packaging files onto an older tree (both are in the tree). The step
+          # below still asserts the checkout is exactly the dispatched commit, so a future step
+          # that adds a `ref:` cannot silently change what was built.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+      - name: Configure approved build inputs
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          test -s "$CRAFT_FONTS_DIR/fonts/manifest.txt"
+          grep -F 'check_updates: None' apps/photocraft/src/services.rs
+          rustup toolchain install 1.99.1 --profile minimal
+      - name: Unit tests for the identity switch
+        shell: bash
+        run: |
+          # The two source files that read the compile-time edition flag, plus the packaged-identity
+          # consistency test (the .desktop StartupWMClass must equal the compiled app id). Cheap
+          # truth for all three legs: it compiles with PHOTOCRAFT_SGL_EDITION set, so the SGL
+          # branches are the ones under test here, and both branch sets are covered (the tests pin
+          # data_dir_name for both flags, and both packaged desktop entries are checked against
+          # this build's app id). Per-leg on purpose: the folder-name helper is cfg-gated per
+          # platform, so each runner proves its own convention.
+          cargo test -p photocraft --bin photocraft -- app_dirs the_desktop_entry_names_the_window_class
+          cargo test -p photocraft-ui-egui --lib os_window
+      - name: Universal macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          bash packaging/macos/package.sh --arch universal
+          bash packaging/macos/verify.sh --arch universal
+          # The SGL name proves the edition switch applied; an upstream-named DMG here would mean
+          # SGL_EDITION did not reach the packaging, and this step would stop rather than upload it.
+          dmg=(dist/release/photocraft-sgl-*-macos-universal.dmg)
+          test "${#dmg[@]}" = 1
+          # The image's own integrity, before it is uploaded: a truncated or corrupt DMG is a build
+          # fault, and the verify stage would otherwise spend its time on a bad download.
+          hdiutil verify "${dmg[0]}"
+          mkdir downloads
+          cp dist/release/*-macos-universal.{dmg,zip} downloads/
+          cat > downloads/README.txt <<'TXT'
+          PhotoCraft with SGL Tools - macOS universal (Apple silicon and Intel). Unofficial build,
+          ad-hoc signed, not notarized: Gatekeeper may block a downloaded copy.
+
+          It is a separate application from PhotoCraft: its own bundle identifier, its own settings
+          in ~/Library/Application Support/PhotoCraftSGL, and its own "Open With" entry for
+          documents. It never replaces PhotoCraft or changes any default application.
+          TXT
+          cat > downloads/PROVENANCE.txt <<EOF
+          application source: $GITHUB_SHA (this run's commit; source and packaging in one tree)
+          craft-fonts: b076417b5880bd4154bd22f00695b1d28c6bea83
+          rust: $(rustc --version) (aarch64-apple-darwin + x86_64-apple-darwin, lipo universal)
+          edition: SGL (PHOTOCRAFT_SGL_EDITION + SGL_EDITION set as job env)
+          signing: ${MACOS_SIGN_IDENTITY:-(none set in this job, so ad-hoc)}
+          packaging checks run here: package.sh, verify.sh, hdiutil verify of the image
+          installed identity, signature, architecture, launch and settings folder: verify stage
+          runner: macos-15, macOS $(sw_vers -productVersion)
+          EOF
+      - name: Stage the macOS distribution files for diagnosis
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Staged straight after packaging, so a failure in a later build step still leaves the
+          # files as packaged and their checksums to inspect. For diagnosis only: the bundle meant
+          # for distribution is the one the verify stage publishes after its own checks.
+          mkdir -p downloads-diagnostic
+          found=0
+          for f in dist/release/photocraft-sgl-*-macos-universal.dmg dist/release/photocraft-cli-*-macos-universal.zip; do
+            if [[ -e "$f" ]]; then cp "$f" downloads-diagnostic/ && found=1; else echo "not produced: $f"; fi
+          done
+          if [[ "$found" != 1 ]]; then echo "nothing to stage"; exit 0; fi
+          printf 'DIAGNOSTIC COPY - staged when packaging finished, before every later check passed.\nNot for distribution.\n' > downloads-diagnostic/DIAGNOSTIC.txt
+          ( cd downloads-diagnostic && shasum -a 256 photocraft-* | tee SHA256SUMS.txt && shasum -a 256 -c SHA256SUMS.txt )
+      - name: Linux x86-64 AppImage and tarball
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config clang libclang-dev libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev libasound2-dev libudev-dev libvulkan1 desktop-file-utils squashfs-tools xvfb
+          bash packaging/linux/package.sh --formats "appimage tar"
+          # The build stage proves the names only: upstream-named artifacts here would mean
+          # SGL_EDITION never reached package.sh, and uploading them would waste the whole run. What
+          # is inside them - launcher ids, linked libraries, the run itself - is the verify stage.
+          appimage=("$PWD"/dist/release/photocraft-sgl-*-linux-x86_64.AppImage)
+          archive=("$PWD"/dist/release/photocraft-sgl-*-linux-x86_64.tar.gz)
+          test "${#appimage[@]}" = 1 && test "${#archive[@]}" = 1
+          mkdir downloads
+          cp "${appimage[0]}" "${archive[0]}" downloads/
+          cat > downloads/README.txt <<'TXT'
+          PhotoCraft with SGL Tools - Linux x86-64. Unofficial build.
+
+          AppImage: make it executable and run it. On first run it registers its own launcher
+          entry and icons (named ai.storyteller.photocraft.sgl) beside an installed PhotoCraft's,
+          never over them; set PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1 to skip that.
+          tar.gz: the installed file tree - bin/ and share/, i.e. the contents of /usr with no
+          /usr prefix inside the archive. Copy its contents into /usr/local, or run
+          bin/photocraft from wherever you extract it.
+
+          Both are separate from PhotoCraft: their own settings in ~/.config/photocraft-sgl
+          (recovery files in ~/.local/state/photocraft-sgl), their own single-instance files, and
+          an "Open With" entry only - no default application is ever changed.
+          TXT
+          cat > downloads/PROVENANCE.txt <<EOF
+          application source: $GITHUB_SHA (this run's commit; source and packaging in one tree)
+          craft-fonts: b076417b5880bd4154bd22f00695b1d28c6bea83
+          rust: $(rustc --version) (x86_64-unknown-linux-gnu, Ubuntu 22.04 / glibc 2.35)
+          edition: SGL (PHOTOCRAFT_SGL_EDITION + SGL_EDITION set as job env)
+          appimagetool 1.9.1, type2-runtime 20251108 (pinned, digest-verified)
+          packaged here; contents, launcher ids and the AppImage run: verify stage
+          EOF
+      - name: Stage the Linux distribution files for diagnosis
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p downloads-diagnostic
+          found=0
+          for f in dist/release/photocraft-sgl-*-linux-x86_64.AppImage dist/release/photocraft-sgl-*-linux-x86_64.AppImage.zsync dist/release/photocraft-sgl-*-linux-x86_64.tar.gz; do
+            if [[ -e "$f" ]]; then cp "$f" downloads-diagnostic/ && found=1; else echo "not produced: $f"; fi
+          done
+          if [[ "$found" != 1 ]]; then echo "nothing to stage"; exit 0; fi
+          printf 'DIAGNOSTIC COPY - staged when packaging finished, before every later check passed.\nNot for distribution.\n' > downloads-diagnostic/DIAGNOSTIC.txt
+          ( cd downloads-diagnostic && shasum -a 256 photocraft-* | tee SHA256SUMS.txt && shasum -a 256 -c SHA256SUMS.txt )
+      - name: Install the pinned WiX toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Same pinned toolchain the packaging-lint job uses for the installer policy checks.
+          $tools = Join-Path $env:RUNNER_TEMP 'sgl-windows-wix'
+          dotnet tool install --tool-path $tools wix --version 5.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed.' }
+          $tools >> $env:GITHUB_PATH
+          foreach ($extension in @('UI', 'Util')) {
+            & (Join-Path $tools 'wix.exe') extension add -g "WixToolset.$extension.wixext/5.0.2"
+            if ($LASTEXITCODE -ne 0) { throw "WiX extension $extension installation failed." }
+          }
+      - name: Windows x64 MSI and portable ZIP (independent SGL identity)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # One compilation feeds the MSI, the portable ZIP and the symbols; -Edition sgl selects
+          # the SGL WiX identity and sets PHOTOCRAFT_SGL_EDITION for cargo (the job env already
+          # sets it; the script does too so a local run gets the same binary either way).
+          ./packaging/windows/package.ps1 -Arch x64 -Edition sgl
+      - name: Stage the Windows distribution files for diagnosis
+        if: always() && runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p downloads-diagnostic
+          found=0
+          for f in dist/release/photocraft-sgl-*-windows-x64.msi dist/release/photocraft-sgl-*-windows-x64-portable.zip dist/release/photocraft-sgl-*-windows-x64-symbols.zip; do
+            if [[ -e "$f" ]]; then cp "$f" downloads-diagnostic/ && found=1; else echo "not produced: $f"; fi
+          done
+          if [[ "$found" != 1 ]]; then echo "nothing to stage"; exit 0; fi
+          printf 'DIAGNOSTIC COPY - staged when packaging finished, before the bundle was assembled.\nNot for distribution.\n' > downloads-diagnostic/DIAGNOSTIC.txt
+          ( cd downloads-diagnostic && sha256sum photocraft-sgl-* | tee SHA256SUMS.txt && sha256sum -c SHA256SUMS.txt )
+      - name: Collect the Windows distribution files
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          msi=(dist/release/photocraft-sgl-*-windows-x64.msi)
+          zip=(dist/release/photocraft-sgl-*-windows-x64-portable.zip)
+          symbols=(dist/release/photocraft-sgl-*-windows-x64-symbols.zip)
+          test "${#msi[@]}" = 1 && test "${#zip[@]}" = 1 && test "${#symbols[@]}" = 1
+          version=${msi[0]#dist/release/photocraft-sgl-}
+          version=${version%-windows-x64.msi}
+          rustc_version=$(rustc --version)
+          mkdir downloads
+          cp "$msi" "downloads/PhotoCraft-with-SGL-Tools-v$version-Windows-x64-Setup.msi"
+          cp "$zip" "downloads/PhotoCraft-with-SGL-Tools-v$version-Windows-x64-Portable.zip"
+          cp "$symbols" downloads/
+          cat > downloads/README.txt <<'TXT'
+          PhotoCraft with SGL Tools - Windows x64. Unofficial build, not code-signed.
+
+          Setup (MSI): installs "PhotoCraft with SGL Tools" as a separate app beside an
+          upstream PhotoCraft. It never replaces, upgrades or removes an existing PhotoCraft
+          install, and it does not change the default app for any file type; it appears under
+          "Open with" instead. It keeps its own settings in %APPDATA%\PhotoCraftSGL (crash
+          recovery in %LOCALAPPDATA%\PhotoCraftSGL), so an installed upstream PhotoCraft keeps
+          %APPDATA%\Photocraft and its own running copy: neither one forwards your documents
+          to the other. Default scope is "Only for me" (no administrator needed); "Everyone"
+          offers a machine-wide install. Uninstall from Windows Settings - Apps.
+
+          Portable (ZIP): extract anywhere and run photocraft.exe. The portable.txt next to
+          it keeps settings in a PhotoCraftData folder beside the exe, as always.
+
+          SmartScreen: the build is not code-signed, so a downloaded copy shows "unknown
+          publisher" on first run; choose "More info" then "Run anyway".
+          The photocraft-sgl-*-symbols.zip holds PDB debug files for profilers; it is a CI
+          artifact, not needed to run the app.
+          TXT
+          cat > downloads/PROVENANCE.txt <<EOF
+          application source: $GITHUB_SHA (this run's commit; source and packaging in one tree)
+          craft-fonts: b076417b5880bd4154bd22f00695b1d28c6bea83
+          rust: $rustc_version (x86_64-pc-windows-msvc, static CRT)
+          edition: SGL (PHOTOCRAFT_SGL_EDITION + SGL_EDITION set as job env, and by package.ps1)
+          wix: 5.0.2 (WixToolset.UI.wixext, WixToolset.Util.wixext)
+          packaging checks run here (by package.ps1): install-policy contract, ICE50, PE machine/subsystem
+          per-user install, settings folder, brief run, uninstall, MSI-vs-ZIP binary hash: verify stage
+          runner: $ImageOS
+          EOF
+      - name: Record what this build is, and that it is unverified
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The verify stage reads the commit from inside the bundle rather than trusting the run it
+          # happens to be in: an artifact is only as trustworthy as the metadata travelling with it,
+          # and a verification-only re-run works on another run's files by design.
+          cat > downloads/BUILD-META.txt <<EOF
+          bundle: SGL packages build stage, ${{ matrix.os }}
+          source commit: ${{ github.sha }}
+          build run: ${{ github.run_id }} (attempt ${{ github.run_attempt }}), job build, run ${GITHUB_JOB}
+          built at: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          workflow: ${{ github.workflow }} @ ${{ github.sha }} (${{ github.ref_name }})
+          edition: SGL (PHOTOCRAFT_SGL_EDITION=1, SGL_EDITION=1)
+          toolchain: $(command -v cargo >/dev/null 2>&1 && cargo --version || echo 'not on PATH in this step')
+          verification: none in this job - see VERIFY.txt in the verified bundle
+          EOF
+          printf 'UNVERIFIED: this bundle was packaged but never installed, launched or inspected.\nIt is the input to the verify stage, not a release candidate.\nDo not publish or distribute these files as they are.\n' > downloads/UNVERIFIED.txt
+      - name: Check the bundle's checksums and sizes
+        shell: bash
+        working-directory: downloads
+        run: |
+          set -euo pipefail
+          # Every file in the bundle, not just the packages: the verify stage re-checks this list
+          # after download, so a truncated upload or a changed README cannot pass unnoticed.
+          if command -v sha256sum >/dev/null 2>&1; then
+            digest() { sha256sum "$@"; }
+          else
+            digest() { shasum -a 256 "$@"; }
+          fi
+          digest * | tee SHA256SUMS.txt
+          digest -c SHA256SUMS.txt
+          wc -c *
+      - name: Upload the unverified build bundle
+        # always(): this is the step that makes a package survive its own verification. If a later
+        # build step fails the packages are still kept, and the verify stage of this run - or of a
+        # later verify-only run - has something to work from. Labelled unverified, and never
+        # published: only the verify stage's artifact carries the verified label.
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: sgl-build-unverified-${{ matrix.os }}
+          path: downloads/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload the staging diagnostics
+        if: always() && failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: PhotoCraft-with-SGL-Tools-${{ matrix.os }}-diagnostic
+          path: downloads-diagnostic/
+          if-no-files-found: ignore
+          retention-days: 7
+  verify:
+    # Only plan has to have succeeded: each platform's leg then answers for itself, so a build leg
+    # that produced nothing makes its own verify leg say so and stop red while the other legs still
+    # verify what was built. No verification result can lose the bundle the build stage uploaded, and
+    # a failed plan (a bad run id, a wrong commit) stops the legs instead of running them blind.
+    needs: [plan, build]
+    # !cancelled() is what makes verify-only work at all: in that mode the build job is skipped, and
+    # a skipped dependency skips its dependents unless the condition says otherwise - with a plain
+    # needs.plan.result test here, every verification-only run verified nothing and still reported
+    # success. It still requires plan to have passed, and it deliberately runs whatever the build
+    # outcome was, so each platform's leg answers for itself (see the fetch step).
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.os) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Only the checks run here; no compilation. The checkout is this run's commit so the record
+          # says which version of the *tests* judged the packages, and it is deliberately not the
+          # commit the packages came from - that is read from BUILD-META.txt in the bundle, and the
+          # two must be named in the same place for a re-run to mean anything.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check the checks came from the expected commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+      - name: Fetch the bundle to verify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          build_run='${{ needs.plan.outputs.build-run }}'
+          expected='${{ needs.plan.outputs.source-commit }}'
+          if [[ -z "$expected" ]]; then expected='${{ github.sha }}'; fi
+          if ! gh run download "$build_run" --repo "$GITHUB_REPOSITORY" \
+              --name "sgl-build-unverified-${{ matrix.os }}" --dir bundle; then
+            echo "error: run $build_run has no sgl-build-unverified-${{ matrix.os }} artifact to verify." >&2
+            echo '       That build leg produced no bundle (it failed before packaging, or was skipped):' >&2
+            echo '       nothing is verified for this platform, and nothing here should be read as a result.' >&2
+            echo "       Artifacts that run does have:" >&2
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run/artifacts" --paginate --jq '.artifacts[].name' | sed 's/^/    /' >&2 || true
+            exit 1
+          fi
+          echo "  bundle from run $build_run:"
+          ls -1 bundle | sed 's/^/    /'
+          echo "  the build stage recorded:"
+          sed 's/^/    /' bundle/BUILD-META.txt
+          built="$(sed -n 's/^source commit: //p' bundle/BUILD-META.txt | head -1)"
+          # A verification result is only worth as much as the commit it names: check the claim inside
+          # the bundle, not just the run id someone typed.
+          if [[ "$built" != "$expected" ]]; then
+            echo "error: these packages were built from ${built:-no commit recorded}, but this run pins $expected." >&2
+            exit 1
+          fi
+          echo "  packages built from $built; the checks running here are from ${{ github.sha }}"
+      - name: Check the bundle is intact
+        shell: bash
+        working-directory: bundle
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null 2>&1; then
+            digest() { sha256sum "$@"; }
+          else
+            digest() { shasum -a 256 "$@"; }
+          fi
+          digest -c SHA256SUMS.txt
+          # Keep the build stage's list for the record, then re-hash at the end with VERIFY.txt added.
+          mv SHA256SUMS.txt SHA256SUMS-build.txt
+          wc -c *
+      - name: Check the shipped bundle's identity and signature (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p verify-diagnostics
+          dmg=("$PWD"/bundle/photocraft-sgl-*-macos-universal.dmg)
+          test "${#dmg[@]}" = 1
+          cli=Contents/MacOS/photocraft-cli
+          # Set before the trap can read it: diagnose_cli walks both copies, and an unset name under
+          # `set -u` would turn the diagnostic dump itself into the failure.
+          installed=
+          mount="$RUNNER_TEMP/sgl-dmg"
+          rm -rf "$mount"
+          mkdir -p "$mount"
+          hdiutil verify "${dmg[0]}"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "${dmg[0]}"
+          app="$mount/PhotoCraft with SGL Tools.app"
+          diagnose_cli() {
+            for bundle in "$app" "$installed"; do
+              [[ -n "${bundle:-}" ]] || continue
+              printf '\nExtended attributes for %s/%s\n' "$bundle" "$cli"
+              xattr -l "$bundle/$cli" || true
+            done
+          }
+          cleanup() {
+            local status=$?
+            if (( status != 0 )); then diagnose_cli; fi
+            hdiutil detach "$mount" || true
+            return "$status"
+          }
+          trap cleanup EXIT
+          plutil -lint "$app/Contents/Info.plist"
+          # The bundle identity this edition exists for, on the artifact as shipped: LaunchServices
+          # keys on the identifier, so if it were upstream's the two products would be one app no
+          # matter what the folder and volume were called. The volume name is checked too: the DMG
+          # layout's background alias (packaging/macos/dmg/) resolves through it.
+          # Each comparison prints what the runner actually reported when it fails. A bare [[ ]] or a
+          # non-matching grep stopped the step with no record of which check failed or what it saw.
+          check_plist_key() {
+            local key="$1" want="$2" got
+            got="$(plutil -extract "$key" raw "$app/Contents/Info.plist" 2>&1)"
+            if [[ "$got" != "$want" ]]; then
+              echo "error: $key is '$got' in the shipped bundle, expected '$want'" >&2
+              exit 1
+            fi
+            echo "  $key = $got"
+          }
+          check_plist_key CFBundleIdentifier ai.storyteller.photocraft.sgl
+          check_plist_key CFBundleName "PhotoCraft with SGL Tools"
+          check_plist_key CFBundleExecutable PhotoCraft
+          # `codesign -d` prints `Identifier=<id>`; `Identifier(<id>)` is the form verify/spctl
+          # diagnostics use, so the earlier grep for it could never match a signed bundle.
+          check_code_identifier() {
+            local bundle="$1" want="$2" got
+            got="$(codesign -d --verbose=2 "$bundle" 2>&1 | sed -n 's/^Identifier=//p' | head -1)"
+            if [[ "$got" != "$want" ]]; then
+              echo "error: the code identifier is '${got:-none}', expected $want" >&2
+              codesign -d --verbose=2 "$bundle" 2>&1 | sed 's/^/  codesign: /' >&2
+              exit 1
+            fi
+            echo "  code identifier = $got ($bundle)"
+          }
+          check_code_identifier "$app" ai.storyteller.photocraft.sgl
+          # diskutil pads the field name before the colon ("Volume Name    : X"), which a pattern
+          # anchored as "Volume Name: " never matches - checked against real output locally.
+          volume_name="$(diskutil info "$mount" | sed -n 's/^[[:space:]]*Volume Name[[:space:]]*:[[:space:]]*//p' | head -1)"
+          if [[ "$volume_name" != "PhotoCraft with SGL Tools" ]]; then
+            echo "error: the mounted volume is named '$volume_name', expected 'PhotoCraft with SGL Tools'" >&2
+            exit 1
+          fi
+          echo "  volume name = $volume_name"
+          mounted_signature_ok=true
+          if ! codesign --verify --strict --deep "$app"; then
+            mounted_signature_ok=false
+            if [[ "${MACOS_SIGN_IDENTITY:--}" != - ]]; then exit 1; fi
+            diagnose_cli
+          fi
+          installed="$RUNNER_TEMP/sgl-install/PhotoCraft with SGL Tools.app"
+          rm -rf "$RUNNER_TEMP/sgl-install"
+          mkdir -p "$RUNNER_TEMP/sgl-install"
+          ditto "$app" "$installed"
+          codesign --verify --strict --deep "$installed"
+          # lipo -archs + match, as in packaging/macos/verify.sh: the runner's lipo parses
+          # -verify_arch as a variadic arch list, so `lipo -verify_arch a b <file>` is invalid there.
+          for bin in "Contents/MacOS/PhotoCraft" "$cli"; do
+            archs="$(lipo -archs "$installed/$bin")"
+            for a in arm64 x86_64; do
+              case " $archs " in
+                *" $a "*) ;;
+                *) echo "error: installed $bin lacks $a (has: $archs)" >&2; exit 1 ;;
+              esac
+            done
+          done
+          "$installed/$cli" --version
+          # The nested CLI carries this edition's code identity (package.sh signs it with $CLI_ID),
+          # so no artifact of this build carries another product's identifier.
+          check_code_identifier "$installed/$cli" ai.storyteller.photocraft.sgl-cli
+          # The standalone CLI is a shipped artifact too, so it gets the same two checks.
+          standalone="$RUNNER_TEMP/sgl-cli"
+          rm -rf "$standalone"
+          mkdir -p "$standalone"
+          clizip=("$PWD"/bundle/photocraft-cli-*-macos-universal.zip)
+          test "${#clizip[@]}" = 1
+          unzip -q "${clizip[0]}" -d "$standalone"
+          found_cli="$(find "$standalone" -type f -name photocraft-cli | head -1)"
+          if [[ -z "$found_cli" ]]; then echo 'error: the CLI archive holds no photocraft-cli binary' >&2; exit 1; fi
+          chmod +x "$found_cli"
+          "$found_cli" --version
+          check_code_identifier "$found_cli" ai.storyteller.photocraft.sgl-cli
+          if [[ "$mounted_signature_ok" == false ]]; then
+            diagnose_cli
+            echo '::warning::The ad-hoc app failed signature verification on the mounted DMG, but the ordinary installed copy passed strict recursive verification.'
+          fi
+      - name: Prove the installed app writes this edition's settings (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p verify-diagnostics
+          installed="$RUNNER_TEMP/sgl-install/PhotoCraft with SGL Tools.app"
+          if [[ ! -d "$installed" ]]; then
+            echo "error: $installed is not here - the identity/signature step did not complete, so the" >&2
+            echo '       settings proof did not run and nothing about this platform is verified.' >&2
+            exit 1
+          fi
+          # Proof, from a real run, that the *binary* (not just the plist) keeps its data in the SGL
+          # folder: the log file is attached before any window opens, so this holds even if a VM's
+          # GPU refuses to create one - and `--version` would prove nothing, because it exits before
+          # the settings folder is touched. Upstream's folder must never appear.
+          sgldata="$HOME/Library/Application Support/PhotoCraftSGL"
+          launch_out="$RUNNER_TEMP/macos-launch.txt"
+          "$installed/Contents/MacOS/PhotoCraft" >"$launch_out" 2>&1 &
+          app_pid=$!
+          log_seen=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if [[ -f "$sgldata/logs/photocraft.log" ]]; then log_seen=true; break; fi
+            # An app that has already exited will never write the log; keep polling only while it lives.
+            if ! kill -0 "$app_pid" 2>/dev/null; then break; fi
+            sleep 5
+          done
+          kill "$app_pid" 2>/dev/null || true
+          wait "$app_pid" 2>/dev/null || true
+          cp "$launch_out" verify-diagnostics/macos-launch.txt 2>/dev/null || true
+          if [[ "$log_seen" != true ]]; then
+            # Say which of the two it was: a startup failure on a GPU-less runner must not read as
+            # an identity failure, so show the launcher's own output and where a log really went.
+            echo "error: $sgldata/logs/photocraft.log never appeared (process alive: $(kill -0 "$app_pid" 2>/dev/null && echo yes || echo no))" >&2
+            sed 's/^/  launcher: /' "$launch_out" >&2
+            echo "  folders under ~/Library/Application Support:" >&2
+            ls -1 "$HOME/Library/Application Support" 2>/dev/null | sed 's/^/    /' >&2
+            find "$HOME/Library/Application Support" -maxdepth 3 -name 'photocraft.log' 2>/dev/null | sed 's/^/  log found: /' >&2
+            exit 1
+          fi
+          echo "  the installed app wrote $sgldata/logs/photocraft.log"
+          test ! -e "$HOME/Library/Application Support/Photocraft"
+      - name: Install the runtime libraries the AppImage needs (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A fresh runner: the build leg's -dev packages are not here, and resolving the AppImage's
+          # libraries or starting it needs the runtime halves. Nothing is compiled in this stage.
+          sudo apt-get update
+          # The set is what apps/photocraft/src/linux_libs.rs probes before it will start, so the
+          # launch below is refused for the right reason. This list had no libxkbcommon-x11-0, and
+          # the app stopped the run with exactly that name (run 43673873957); the rest of the X11
+          # group is named out loud rather than left to whatever the runner image happens to carry,
+          # so image drift shows up here instead of as a launch failure three steps later.
+          sudo apt-get install -y libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 \
+            libx11-6 libx11-xcb1 libxcb1 libxcursor1 libxrandr2 libxi6 libegl1 libgl1 \
+            libgtk-3-0 libasound2 libudev1 libvulkan1 xvfb squashfs-tools file
+      - name: Check the Linux packages' identity and libraries
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p verify-diagnostics
+          appimage=("$PWD"/bundle/photocraft-sgl-*-linux-x86_64.AppImage)
+          archive=("$PWD"/bundle/photocraft-sgl-*-linux-x86_64.tar.gz)
+          test "${#appimage[@]}" = 1 && test "${#archive[@]}" = 1
+          # Absolute paths first: the extraction and the tarball land under this runner's temp dir,
+          # and nothing here reaches into a build tree (there isn't one on this runner).
+          cd "$RUNNER_TEMP"
+          test -x "${appimage[0]}"
+          # The AppImage runtime unpacks itself; no build tree and no compilation involved.
+          "${appimage[0]}" --appimage-extract
+          file squashfs-root/usr/bin/photocraft | grep -F 'x86-64'
+          ldd squashfs-root/usr/bin/photocraft | tee libraries.txt
+          ! grep -F 'not found' libraries.txt
+          cp libraries.txt "$GITHUB_WORKSPACE/verify-diagnostics/ldd.txt" 2>/dev/null || true
+          squashfs-root/AppRun --version
+          # The launcher identity inside the AppImage: this edition's desktop id, icon name and
+          # metainfo component, AppRun's integration id pointed at them, and none of upstream's
+          # registered names (including the shared mime package, which stays upstream's alone).
+          test -f squashfs-root/ai.storyteller.photocraft.sgl.desktop
+          test -f squashfs-root/ai.storyteller.photocraft.sgl.png
+          test -f squashfs-root/usr/share/applications/ai.storyteller.photocraft.sgl.desktop
+          test -f squashfs-root/usr/share/icons/hicolor/256x256/apps/ai.storyteller.photocraft.sgl.png
+          test -f squashfs-root/usr/share/metainfo/ai.storyteller.photocraft.sgl.metainfo.xml
+          test ! -e squashfs-root/usr/share/applications/ai.storyteller.photocraft.desktop
+          test ! -e squashfs-root/usr/share/mime/packages/ai.storyteller.photocraft.xml
+          grep -Fx 'DESK_ID=ai.storyteller.photocraft.sgl' squashfs-root/AppRun
+          tar -xzf "${archive[0]}"
+          cli=(photocraft-sgl-*/bin/photocraft-cli)
+          test "${#cli[@]}" = 1
+          "${cli[0]}" --version
+          # The tarball's top directory *is* the FHS payload: package.sh copies $STAGE/usr to
+          # $BASENAME and tars that (see its header: "plain FHS-style tree (bin/, share/)"), so paths
+          # inside it are share/... and bin/..., not usr/share/... - the AppImage layout above is
+          # genuinely different, because that archive carries /usr itself. A silent test -f with the
+          # wrong prefix failed here with nothing to show; the listing below is what says what the
+          # archive actually holds.
+          # Directory-only glob, and it is reported rather than assumed: a bare photocraft-sgl-* also
+          # matches the archive file itself, and a silent test on that count fails with nothing to read.
+          tree=(photocraft-sgl-*/)
+          if [[ "${#tree[@]}" != 1 ]]; then
+            echo "error: extracting the tarball left ${#tree[@]} directories matching photocraft-sgl-*: ${tree[*]:-none}" >&2
+            exit 1
+          fi
+          tree="${tree[0]%/}"
+          check_in_tar() {
+            if [[ ! -f "$tree/$1" ]]; then
+              echo "error: the tarball has no $1 (looked for $tree/$1)" >&2
+              echo '  the first entries of the archive:' >&2
+              tar -tzf "${archive[0]}" | head -40 | sed 's/^/    /' >&2
+              exit 1
+            fi
+            echo "  tarball contains $1"
+          }
+          check_in_tar bin/photocraft
+          check_in_tar bin/photocraft-cli
+          check_in_tar share/applications/ai.storyteller.photocraft.sgl.desktop
+          check_in_tar share/metainfo/ai.storyteller.photocraft.sgl.metainfo.xml
+          # Upstream's registered names must appear nowhere in this edition's tree - searched in the
+          # archive itself, so the check does not depend on guessing which prefix they would use.
+          if tar -tzf "${archive[0]}" | grep -E 'applications/ai\.storyteller\.photocraft\.desktop$|mime/packages/ai\.storyteller\.photocraft\.xml$'; then
+            echo 'error: an upstream desktop or mime name is present in the tarball' >&2
+            exit 1
+          fi
+          echo "  the tarball carries no upstream desktop or mime name"
+      - name: Run the AppImage under Xvfb (settings-folder proof)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p verify-diagnostics
+          # Its own step, and its own evidence: the launcher's output and exit status are captured,
+          # and the run reports where the app's data actually went. A launch that dies before any
+          # window (a shared runner with no usable GPU) is then visibly a startup failure, not an
+          # identity failure - the packaged files' identity was checked in the step above.
+          cd "$RUNNER_TEMP"
+          test -x squashfs-root/AppRun
+          runner_home="$HOME"
+          fake_home="$RUNNER_TEMP/fake-home"
+          rm -rf "$fake_home"
+          mkdir -p "$fake_home"
+          launch_out="$RUNNER_TEMP/linux-launch.txt"
+          # This wrapper's only job is to record the environment the app really started with.
+          # app_dirs::platform_dir prefers XDG_CONFIG_HOME and falls back to HOME, and the run before
+          # this one resolved /home/runner/.config with HOME pointed at a throwaway folder. Pinning
+          # both variables and printing what survived is what separates "the harness lost the
+          # override" from "the app ignored it" - guessing which happened is what this exists to
+          # avoid, and the answer decides how the folder below is judged.
+          cat > "$RUNNER_TEMP/launch-probe.sh" <<'PROBE'
+          #!/usr/bin/env bash
+          echo "launch env: HOME=$HOME XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-unset} DISPLAY=${DISPLAY:-unset} APPIMAGE=${APPIMAGE:-unset}"
+          exec "$@"
+          PROBE
+          chmod +x "$RUNNER_TEMP/launch-probe.sh"
+          status=0
+          HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" \
+            timeout 120 xvfb-run -a "$RUNNER_TEMP/launch-probe.sh" "$PWD/squashfs-root/AppRun" >"$launch_out" 2>&1 || status=$?
+          note=''
+          case "$status" in
+            124 | 137 | 143) note=' (killed by the 120 s limit, so it stayed up that long)' ;;
+          esac
+          echo "launcher exit status: $status$note"
+          sed 's/^/  launcher: /' "$launch_out"
+          # Absolute: this step has changed directory to the runner's temp dir.
+          cp "$launch_out" "$GITHUB_WORKSPACE/verify-diagnostics/linux-launch.txt" 2>/dev/null || true
+          # The folder in the app's own words, not one this step assumed: that line is the claim.
+          settings="$(sed -n 's/.*settings directory ([^)]*): Some("\(.*\)").*/\1/p' "$launch_out" | head -1)"
+          if [[ -z "$settings" ]]; then
+            if [[ "$status" != 0 ]]; then
+              echo "error: the launcher exited $status without ever naming a settings directory: a startup failure, not evidence about the settings folder (launcher output above)" >&2
+            else
+              echo "error: the app ran (status 0) and never named a settings directory (launcher output above)" >&2
+            fi
+            exit 1
+          fi
+          echo "  the app resolved its settings folder to: $settings"
+          case "$settings" in
+            */photocraft-sgl) ;;
+            */photocraft)
+              echo "error: this edition resolved upstream's settings folder ($settings), not photocraft-sgl" >&2
+              exit 1 ;;
+            *)
+              echo "error: the app put its settings somewhere else entirely ($settings); this step proves the folder name, so portable or overridden runs need their own check" >&2
+              exit 1 ;;
+          esac
+          # Judge that folder against what the app was actually given, from the wrapper's own line.
+          pinned=0
+          grep -qF "HOME=$fake_home XDG_CONFIG_HOME=$fake_home/.config" "$launch_out" && pinned=1
+          if [[ "$settings" != "$fake_home/.config/photocraft-sgl" ]]; then
+            if [[ "$pinned" == 1 ]]; then
+              echo "error: HOME and XDG_CONFIG_HOME both reached the launched process, yet the app chose $settings over $fake_home/.config/photocraft-sgl" >&2
+              echo "  what the run left under the throwaway HOME:" >&2
+              find "$fake_home" -maxdepth 6 | sed 's/^/    /' >&2
+              exit 1
+            fi
+            echo "  note: the throwaway pin never reached the app (launch env line above), so it used the runner account's own folder; the folder-name proof above is what this run can show"
+          fi
+          if [[ ! -f "$settings/logs/photocraft.log" ]]; then
+            echo "error: the app named $settings and no logs/photocraft.log appeared in it" >&2
+            echo "  what the run left under the throwaway HOME:"
+            find "$fake_home" -maxdepth 4 -type d \( -name 'photocraft*' -o -name '.config' -o -name '.local' \) | sed 's/^/    dir: /'
+            find "$fake_home" -maxdepth 6 -name 'photocraft.log' | sed 's/^/    log: /'
+            exit 1
+          fi
+          echo "  and wrote $settings/logs/photocraft.log"
+          for probe_home in "$fake_home" "$runner_home"; do
+            if [[ -e "$probe_home/.config/photocraft" ]]; then
+              echo "error: upstream's $probe_home/.config/photocraft appeared during this edition's run" >&2
+              exit 1
+            fi
+          done
+          echo "  and neither home grew upstream's photocraft folder"
+      - name: Install, run and uninstall the MSI on the runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # What the installed product actually does, on a runner: a silent per-user install, a brief
+          # run, the settings-folder assertion, and an uninstall. The upstream app is *not* installed
+          # here, so this proves this product's own behaviour - never claim it as proof of
+          # side-by-side coexistence with a live upstream install, which stays a manual test.
+          $ErrorActionPreference = 'Stop'
+          $diagnostics = Join-Path $env:GITHUB_WORKSPACE 'verify-diagnostics'
+          New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
+          $notes = @()
+          $bundle = Join-Path $env:GITHUB_WORKSPACE 'bundle'
+          # Counted, not indexed: a bundle missing one of its two files should say so, rather than
+          # fail inside an index expression with PowerShell's own message.
+          $msiFiles = @(Get-ChildItem (Join-Path $bundle '*-Windows-x64-Setup.msi'))
+          $zipFiles = @(Get-ChildItem (Join-Path $bundle '*-Windows-x64-Portable.zip'))
+          if ($msiFiles.Count -ne 1) { throw "the bundle holds $($msiFiles.Count) files matching *-Windows-x64-Setup.msi; expected exactly 1" }
+          if ($zipFiles.Count -ne 1) { throw "the bundle holds $($zipFiles.Count) files matching *-Windows-x64-Portable.zip; expected exactly 1" }
+          $msi = $msiFiles[0].FullName
+          $zip = $zipFiles[0].FullName
+          $installLog = Join-Path $env:RUNNER_TEMP 'msi-install.log'
+          # Scope properties are separate arguments, so no shell quoting sits between msiexec and the
+          # value. Do NOT pass ALLUSERS here: the package already carries ALLUSERS=2 plus
+          # MSIINSTALLPERUSER=1 (Package Scope="perUserOrMachine"; check-install-policy.ps1 requires
+          # both in the Property table), and that default is the silent "Only for me". Windows
+          # Installer honours MSIINSTALLPERUSER only while ALLUSERS is 2, so overriding ALLUSERS to
+          # an empty string erases the 2, the per-user request is ignored, and an elevated runner
+          # installs machine-wide - which this step once reported as a warning. The echoed command
+          # line, the copied log and the candidate folders below are what say where the files went.
+          $installArgs = @('/i', ('"' + $msi + '"'), '/qn', '/l*v', ('"' + $installLog + '"'), 'MSIINSTALLPERUSER=1')
+          Write-Output ('msiexec ' + ($installArgs -join ' '))
+          $install = Start-Process msiexec.exe -ArgumentList $installArgs -Wait -PassThru
+          # The verbose log is kept whether the install succeeded or not: the earlier report was
+          # "exit code 0, but no files where expected", and the log is what names the folder msiexec
+          # resolved and the scope it used.
+          if (Test-Path $installLog) { Copy-Item $installLog (Join-Path $diagnostics 'msi-install.log') -Force }
+          Write-Output ('msiexec exit code: ' + $install.ExitCode)
+          $notes += 'msiexec exit code: ' + $install.ExitCode
+          if ($install.ExitCode -ne 0) {
+            if (Test-Path $installLog) { Get-Content $installLog -Tail 80 }
+            Set-Content -Path (Join-Path $diagnostics 'verify-notes.txt') -Value $notes
+            throw "silent per-user install failed with exit code $($install.ExitCode)"
+          }
+          if (Test-Path $installLog) {
+            Select-String -Path $installLog -Pattern 'DIRCACTION|FinalDir|INSTALLFOLDER|ALLUSERS|MSIINSTALLPERUSER' |
+              Select-Object -First 40 | ForEach-Object { Write-Output ('  log: ' + $_.Line) }
+          }
+          # Where the files actually are, rather than where one scope would put them: the WiX source
+          # installs this product to ArtCraft\PhotoCraft with SGL Tools under the per-user or the
+          # machine Program Files, so both are checked and every candidate is reported.
+          $leaf = 'ArtCraft\PhotoCraft with SGL Tools'
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA ('Programs\' + $leaf)),
+            (Join-Path $env:ProgramFiles $leaf),
+            (Join-Path ${env:ProgramFiles(x86)} $leaf)
+          )
+          foreach ($c in $candidates) {
+            $line = '  candidate: ' + $c + ' -> ' + (Test-Path (Join-Path $c 'photocraft.exe'))
+            Write-Output $line
+            $notes += $line
+          }
+          $found = @($candidates | Where-Object { Test-Path (Join-Path $_ 'photocraft.exe') })
+          if ($found.Count -eq 0) {
+            foreach ($root in @($env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              Get-ChildItem -Path $root -Filter photocraft.exe -Recurse -Depth 4 -ErrorAction SilentlyContinue |
+                Select-Object -First 5 | ForEach-Object { Write-Output ('  found elsewhere: ' + $_.FullName) }
+            }
+            Set-Content -Path (Join-Path $diagnostics 'verify-notes.txt') -Value $notes
+            throw 'the install put no photocraft.exe in any expected folder; the candidates above and the copied msi-install.log say where it went'
+          }
+          if ($found.Count -gt 1) { throw ('photocraft.exe appeared in more than one expected folder: ' + ($found -join ', ')) }
+          $dir = $found[0]
+          $exe = Join-Path $dir 'photocraft.exe'
+          Write-Output ('  installed at: ' + $dir)
+          $notes += 'installed at: ' + $dir
+          if ($dir -notlike ('*Programs\ArtCraft\PhotoCraft with SGL Tools')) {
+            # A machine-wide landing is now a regression, not a note: the package defaults to the
+            # per-user context (the same contract check-install-policy.ps1 enforces on the Property
+            # table), and the VERIFY.txt text below claims a per-user install. The diagnostics
+            # artifact keeps msi-install.log, which names the context msiexec actually used.
+            Set-Content -Path (Join-Path $diagnostics 'verify-notes.txt') -Value $notes
+            throw ('the silent install landed machine-wide at ' + $dir + ' although the package defaults to per-user; see msi-install.log in the diagnostics artifact')
+          }
+          $versionInfo = (Get-Item $exe).VersionInfo
+          Write-Output ('  installed executable: ' + $versionInfo.FileVersion + ' / ' + $versionInfo.ProductName)
+          $notes += 'installed executable: ' + $versionInfo.FileVersion + ' / ' + $versionInfo.ProductName
+          # The portable ZIP holds its files at the archive root (#7699) - portable mode needs
+          # portable.txt beside the exe wherever it is extracted - so this is also a layout check.
+          $portableDir = Join-Path $env:RUNNER_TEMP 'portable'
+          Expand-Archive -Path $zip -DestinationPath $portableDir -Force
+          $zipExe = Join-Path $portableDir 'photocraft.exe'
+          if (-not (Test-Path $zipExe)) { throw 'the portable ZIP does not hold photocraft.exe at its root' }
+          if (-not (Test-Path (Join-Path $portableDir 'portable.txt'))) { throw 'the portable ZIP lost portable.txt' }
+          # One compilation feeds both artifacts; a hash difference would mean two binaries shipped.
+          if ((Get-FileHash $exe).Hash -ne (Get-FileHash $zipExe).Hash) {
+            throw 'the installed photocraft.exe and the portable ZIP photocraft.exe differ'
+          }
+          Write-Output '  the installed exe and the portable exe are the same file (SHA-256)'
+          $notes += 'the installed exe and the portable exe share one SHA-256'
+          # A brief real launch proves the compiled-in settings folder. The log file is attached
+          # before the window opens, so a runner whose GPU cannot make one still proves the folder -
+          # and --version would prove nothing, because it exits before the folder is touched.
+          function Wait-For-Log([string] $path) {
+            $deadline = (Get-Date).AddMinutes(2)
+            while ((Get-Date) -lt $deadline -and -not (Test-Path $path)) { Start-Sleep -Seconds 3 }
+            Test-Path $path
+          }
+          function Start-With-Capture([string] $path) {
+            # Take the app's own output when the runner allows redirection: a process that exits
+            # early then leaves a reason behind, not just a missing log file.
+            $leafName = (Split-Path -Leaf $path)
+            $outFile = Join-Path $env:RUNNER_TEMP ($leafName + '.out.txt')
+            $errFile = Join-Path $env:RUNNER_TEMP ($leafName + '.err.txt')
+            try {
+              $p = Start-Process $path -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+            } catch {
+              Write-Output ('  (output redirection refused for ' + $path + '; starting it without redirection)')
+              $p = Start-Process $path -PassThru
+            }
+            return @{ Process = $p; Out = $outFile; Err = $errFile }
+          }
+          function Report-Run($run, [string] $expectedLog, [string] $searchRoot) {
+            Write-Output ('error: ' + $expectedLog + ' never appeared.')
+            foreach ($f in @($run.Out, $run.Err)) {
+              if ((Test-Path $f) -and (Get-Item $f).Length -gt 0) {
+                Get-Content $f -Tail 30 | ForEach-Object { Write-Output ('  app output: ' + $_) }
+              }
+            }
+            Get-ChildItem -Path $searchRoot -Recurse -Depth 3 -Filter photocraft.log -ErrorAction SilentlyContinue |
+              Select-Object -First 5 | ForEach-Object { Write-Output ('  log found: ' + $_.FullName) }
+            Get-ChildItem -Path $searchRoot -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -like 'PhotoCraft*' } | ForEach-Object { Write-Output ('  settings folder present: ' + $_.Name) }
+          }
+          $app = Start-With-Capture $exe
+          $settingsLog = Join-Path $env:APPDATA 'PhotoCraftSGL\logs\photocraft.log'
+          $settingsOk = Wait-For-Log $settingsLog
+          Stop-Process -Id $app.Process.Id -Force -ErrorAction SilentlyContinue
+          $app.Process.WaitForExit()
+          if (-not $settingsOk) {
+            # Not "wrong settings folder" until the evidence says so: a launch that never reached the
+            # log is a startup failure, and the captured output above says which one it was.
+            Report-Run $app $settingsLog $env:APPDATA
+            Copy-Item @($app.Out, $app.Err) -Destination $diagnostics -Force -ErrorAction SilentlyContinue
+            Set-Content -Path (Join-Path $diagnostics 'verify-notes.txt') -Value $notes
+            throw 'the installed app never wrote this edition''s settings log; the output above says what happened instead'
+          }
+          Write-Output ('  the installed app wrote ' + $settingsLog)
+          $notes += 'the installed app wrote ' + $settingsLog
+          if (Test-Path (Join-Path $env:APPDATA 'Photocraft')) {
+            throw 'the installed app wrote upstream settings folder %APPDATA%\Photocraft'
+          }
+          # The portable copy must keep doing what it always did: its data beside the exe.
+          $port = Start-With-Capture $zipExe
+          $portableLog = Join-Path $portableDir 'PhotoCraftData\logs\photocraft.log'
+          $portableOk = Wait-For-Log $portableLog
+          Stop-Process -Id $port.Process.Id -Force -ErrorAction SilentlyContinue
+          $port.Process.WaitForExit()
+          if (-not $portableOk) {
+            Report-Run $port $portableLog $portableDir
+            Copy-Item @($port.Out, $port.Err) -Destination $diagnostics -Force -ErrorAction SilentlyContinue
+            Set-Content -Path (Join-Path $diagnostics 'verify-notes.txt') -Value $notes
+            throw 'the portable copy never wrote its PhotoCraftData log; the output above says what happened instead'
+          }
+          Write-Output ('  the portable copy wrote ' + $portableLog)
+          $notes += 'the portable copy wrote ' + $portableLog
+          # Uninstall: the product removes what it installed, leaving nothing to mistake for an
+          # orphaned install. (Its settings folder stays, as Windows Installer convention has it.)
+          $uninstall = Start-Process msiexec.exe -ArgumentList ('/x "' + $msi + '" /qn') -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "silent uninstall failed with exit code $($uninstall.ExitCode)" }
+          if (Test-Path $exe) { throw 'the uninstall left photocraft.exe behind' }
+          Write-Output '  the uninstall removed the installed files'
+          $notes += 'the uninstall removed the installed files'
+          Set-Content -Path (Join-Path $diagnostics 'verify-notes.txt') -Value $notes
+      - name: Record what this leg proved
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_run='${{ needs.plan.outputs.build-run }}'
+          if [[ ! -f bundle/BUILD-META.txt ]]; then
+            # Only reachable when an earlier step of this leg failed, so say plainly that nothing was
+            # proved - a red job whose last step names a missing file is easy to misread as that
+            # file being the finding.
+            echo 'error: no bundle in this job, so no proof was recorded and no verified artifact is' >&2
+            echo '       uploaded. The failure is in an earlier step of this leg; read that step.' >&2
+            exit 1
+          fi
+          built="$(sed -n 's/^source commit: //p' bundle/BUILD-META.txt | head -1)"
+          {
+            echo "verification of the ${{ matrix.os }} packages"
+            echo "  packages: build run $build_run, built from $built (see BUILD-META.txt, SHA256SUMS-build.txt)"
+            echo "  checks:   ${{ github.workflow }} run ${{ github.run_id }} (attempt ${{ github.run_attempt }}), commit ${{ github.sha }}, branch ${{ github.ref_name }}"
+            echo "  bundle:   every file re-hashed below matches the build stage's SHA256SUMS-build.txt"
+            case '${{ runner.os }}' in
+              macOS)
+                echo '  proved here: DMG image integrity; bundle identity (CFBundleIdentifier, CFBundleName,'
+                echo '    CFBundleExecutable); code identifiers of the app bundle, its nested CLI and the'
+                echo '    standalone CLI; DMG volume name; recursive strict signature of the installed copy;'
+                echo '    arm64 + x86_64 slices; photocraft-cli --version; a real run that wrote'
+                echo '    ~/Library/Application Support/PhotoCraftSGL/logs/photocraft.log with no upstream'
+                echo '    folder appearing.'
+                echo '  not proved here: notarization or Gatekeeper behaviour for a downloaded copy (ad-hoc'
+                echo '    signed); coexistence with a live upstream install (upstream is not installed on'
+                echo '    this runner); the app ever opening a window on this runner'\''s GPU.'
+                ;;
+              Linux)
+                echo '  proved here: AppImage and tarball identity (desktop, icon, metainfo and AppRun ids of'
+                echo '    this edition, and none of upstream'\''s registered names); an x86-64 binary with no'
+                echo '    unresolved library; photocraft-cli --version in the tarball; an AppImage run under'
+                echo '    Xvfb that wrote ~/.config/photocraft-sgl/logs/photocraft.log with no upstream'
+                echo '    folder appearing.'
+                echo '  not proved here: desktop integration on a real desktop session; coexistence with a'
+                echo '    live upstream install (upstream is not installed on this runner); the app ever'
+                echo '    opening a window on this runner'\''s GPU.'
+                ;;
+              Windows)
+                echo '  proved here: silent per-user install of the shipped MSI and where it put the files;'
+                echo '    the installed executable'\''s version information; one SHA-256 shared by the MSI and'
+                echo '    the portable ZIP executables; portable layout (photocraft.exe and portable.txt at'
+                echo '    the archive root); a real run that wrote %APPDATA%\PhotoCraftSGL\logs\photocraft.log'
+                echo '    with no upstream folder appearing; the portable copy writing its PhotoCraftData'
+                echo '    log; a silent uninstall leaving no files behind.'
+                echo '  not proved here: code signing or SmartScreen behaviour (this build is not signed);'
+                echo '    coexistence with a live upstream install (upstream is not installed on this runner);'
+                echo '    the app ever opening a window on this runner'\''s GPU.'
+                ;;
+            esac
+          } > bundle/VERIFY.txt
+          # Only a leg that got here has proved anything, so only a leg that got here removes the
+          # build stage's marker. A failed leg uploads nothing: the unverified bundle is what remains.
+          rm -f bundle/UNVERIFIED.txt
+          sed 's/^/  /' bundle/VERIFY.txt
+          if command -v sha256sum >/dev/null 2>&1; then
+            digest() { sha256sum "$@"; }
+          else
+            digest() { shasum -a 256 "$@"; }
+          fi
+          ( cd bundle && digest * > SHA256SUMS.txt && digest -c SHA256SUMS.txt )
+      - name: Upload the verified distribution files
+        # The artifact keeps the name it always had, so the contract is unchanged: an artifact under
+        # this name has been installed, inspected and run by this run's verify stage. A leg that did
+        # not get here uploads nothing, and the build stage's unverified bundle - clearly labelled -
+        # is all that survives.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: PhotoCraft-with-SGL-Tools-${{ matrix.os }}
+          path: bundle/
+          if-no-files-found: error
+      - name: Upload the verification diagnostics
+        # Logs and notes only, never a second copy of the packages: the packages are already kept by
+        # the build stage's unverified bundle, so a failed leg costs a few kilobytes here.
+        if: always() && failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: PhotoCraft-with-SGL-Tools-${{ matrix.os }}-verify-diagnostics
+          path: verify-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+

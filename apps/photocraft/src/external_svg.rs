@@ -1377,7 +1377,7 @@ mod native {
 
         #[cfg(unix)]
         #[test]
-        fn unix_saved_file_rejects_symlinks_and_fifos_without_blocking() {
+        fn unix_saved_file_rejects_a_replaced_symlink() {
             let owned = OwnedSvg::create(b"<svg/>").unwrap();
             let stamp = owned.stamp().unwrap();
             let target = owned.root.join("private.svg");
@@ -1387,6 +1387,19 @@ mod native {
             assert!(owned.stamp().is_err());
             assert!(owned.read(&stamp).is_err());
             assert!(owned.overwrite(b"<svg/>").is_err());
+            assert_eq!(std::fs::read(&target).unwrap(), b"private contents");
+        }
+
+        // Linux only: rustix::fs::mkfifoat exists on linux_kernel only, so keeping this half under
+        // the same `#[cfg(unix)]` as the symlink case above meant the test module did not compile
+        // at all on macOS. The behaviour it covers is the O_NONBLOCK flag in no_follow.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn unix_saved_file_rejects_a_substituted_fifo_without_blocking() {
+            let owned = OwnedSvg::create(b"<svg/>").unwrap();
+            let stamp = owned.stamp().unwrap();
+            let target = owned.root.join("private.svg");
+            std::fs::write(&target, b"private contents").unwrap();
             std::fs::remove_file(&owned.file).unwrap();
             rustix::fs::mkfifoat(rustix::fs::CWD, &owned.file, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR).unwrap();
             assert!(owned.stamp().is_err());

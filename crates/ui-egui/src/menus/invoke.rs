@@ -61,7 +61,7 @@ pub(crate) fn adjustment_creation_command(id: &str) -> bool {
     id.starts_with("layer.newAdjustmentLayer.") && photocraft_engine::commands::find(id).is_some()
 }
 
-fn guard_secondary_menu(app: &PhotocraftApp, id: &str) -> Result<(), String> {
+pub(crate) fn guard_secondary_menu(app: &PhotocraftApp, id: &str) -> Result<(), String> {
     if id == "window.focusMainCanvas" {
         return Ok(());
     }
@@ -80,7 +80,7 @@ fn guard_secondary_menu(app: &PhotocraftApp, id: &str) -> Result<(), String> {
 
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
-    guard_secondary_menu(app, id)?;
+    guard_secondary_menu(app, id).inspect_err(|_| crate::notices::secondary_edit(app, ctx))?;
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
     {

@@ -472,10 +472,6 @@ pub struct PhotocraftApp {
     pub live_adjust: Option<(photocraft_doc::LayerId, Value)>,
     /// Frames rendered (for tests and the status bar).
     pub frame: u64,
-    /// The pointer rested on the notice stack last frame. Used to give a fresh auto-hide delay in
-    /// the frame the pointer leaves, so a long stationary hover never counts as elapsed time
-    /// (#2022); set by `notices::show`.
-    pub(crate) notices_hovered: bool,
     /// The low-memory warning's schedule and state (`memory_warning`).
     pub(crate) low_memory: memory_warning::Watch,
     /// Apply theme on first frame.

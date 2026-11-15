@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::PhotocraftApp;
 
+pub(crate) const SECONDARY_EDIT_TITLE: &str = "Editing requires the Main Canvas";
 const CLIPBOARD_UNREADABLE: &str = "Pasting from other apps is unavailable";
 /// At most this many notices are kept; older ones drop off.
 pub const MAX_NOTICES: usize = 3;
@@ -18,6 +19,8 @@ const SLOW_CPU_REFRESH_MS: f64 = 1000.0;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Notice {
     pub id: u64,
+    #[serde(skip)]
+    window: Option<u64>,
     pub title: String,
     #[serde(default)]
     pub lines: Vec<String>,
@@ -53,6 +56,7 @@ pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String
     let id = app.ui.alloc_id();
     app.ui.notices.push(Notice {
         id,
+        window: None,
         title: title.into(),
         lines,
         error,
@@ -63,6 +67,29 @@ pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String
     });
     cap_notices(app);
     id
+}
+
+pub(crate) fn secondary_edit(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.automation_input || app.programmatic_playback {
+        return;
+    }
+    let window = if ctx.viewport_id() != egui::ViewportId::ROOT {
+        app.view_composites.rendering_window
+    } else if !ctx.input(|input| input.focused) {
+        crate::view_visibility::focused_window(app).filter(|&id| !crate::canvas::docked_view::contains(app, id))
+    } else {
+        None
+    };
+    if app.ui.notices.iter().any(|notice| notice.title == SECONDARY_EDIT_TITLE && notice.window == window) {
+        return;
+    }
+    let id =
+        post(app, SECONDARY_EDIT_TITLE, vec!["Independent Views are display-only. Select View → Focus Main Canvas to continue editing.".into()], false, None);
+    if let Some(notice) = app.ui.notices.iter_mut().find(|notice| notice.id == id) {
+        notice.window = window;
+    }
+    let viewport = window.map_or(ctx.viewport_id(), |id| egui::ViewportId::from_hash_of(("docwin", id)));
+    ctx.request_repaint_of(viewport);
 }
 
 fn cap_notices(app: &mut PhotocraftApp) {
@@ -182,13 +209,13 @@ pub fn error(app: &mut PhotocraftApp, message: String) {
 /// is true on the frame it moves away. In both cases the timers restart from `now`, so a long
 /// stationary hover is never counted as elapsed time. Returns the seconds until the next notice
 /// would expire, so the caller can request a repaint then.
-fn expire(app: &mut PhotocraftApp, now: f64, hovered: bool, just_left: bool, auto_hide: bool, duration: f64) -> Option<f64> {
+fn expire(app: &mut PhotocraftApp, window: Option<u64>, now: f64, hovered: bool, just_left: bool, auto_hide: bool, duration: f64) -> Option<f64> {
     if !auto_hide {
         return None;
     }
     let mut expired = Vec::new();
     let mut next = f64::INFINITY;
-    for n in app.ui.notices.iter_mut().filter(|n| !n.sticky) {
+    for n in app.ui.notices.iter_mut().filter(|n| n.window == window && !n.sticky) {
         if n.shown_at.is_none() {
             n.shown_at = Some(now);
         }
@@ -216,8 +243,14 @@ fn expire(app: &mut PhotocraftApp, now: f64, hovered: bool, just_left: bool, aut
 /// Draw the notices; each has a close button. When Interface › Notification › Auto Hide Notices
 /// is on, a notice disappears once its delay is up unless the pointer rests on the stack.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if app.ui.notices.is_empty() {
-        app.notices_hovered = false;
+    app.ui.notices.retain(|notice| notice.window.is_none_or(|id| app.ui.windows.iter().any(|window| window.id == id && window.open)));
+    show_for_window(app, ctx, None);
+}
+
+pub(crate) fn show_for_window(app: &mut PhotocraftApp, ctx: &egui::Context, window: Option<u64>) {
+    let hover_id = egui::Id::unique(("photocraft-notices-hovered", ctx.viewport_id(), window));
+    if !app.ui.notices.iter().any(|notice| notice.window == window) {
+        ctx.data_mut(|data| data.remove::<bool>(hover_id));
         return;
     }
     let t = crate::theme::Tokens::get(ctx);
@@ -229,7 +262,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .interactable(true)
         .show(ctx, |ui| {
             ui.set_max_width(360.0);
-            for n in &app.ui.notices {
+            for n in app.ui.notices.iter().filter(|notice| notice.window == window) {
                 egui::Frame::NONE
                     .fill(t.card)
                     .stroke(egui::Stroke::new(1.0, if n.error { t.warning } else { t.card_border }))
@@ -270,9 +303,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let hovered = ctx.pointer_hover_pos().is_some_and(|p| area.response.rect.contains(p));
     // The frame the pointer leaves the stack starts a fresh delay, so time spent hovering never
     // counts towards the auto-hide (#2022).
-    let just_left = std::mem::replace(&mut app.notices_hovered, hovered) && !hovered;
+    let just_left = ctx.data_mut(|data| {
+        let was_hovered = data.get_temp::<bool>(hover_id).unwrap_or_default();
+        data.insert_temp(hover_id, hovered);
+        was_hovered && !hovered
+    });
     let before = app.ui.notices.len();
-    let next = expire(app, now, hovered, just_left, auto_hide, duration);
+    let next = expire(app, window, now, hovered, just_left, auto_hide, duration);
     if app.ui.notices.len() < before {
         // The cards dropped this frame were already painted by it: ask for another frame at once
         // so the refreshed stack is drawn without waiting for unrelated input.
@@ -288,6 +325,29 @@ mod tests {
     use super::*;
     use crate::{PhotocraftApp, Services};
     use photocraft_engine::Session;
+
+    #[test]
+    fn secondary_notice_is_drawn_only_in_its_native_viewport() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        let window = 42;
+        let viewport = egui::ViewportId::from_hash_of(("docwin", window));
+        let mut input = egui::RawInput { viewport_id: viewport, ..Default::default() };
+        input.viewports.insert(viewport, Default::default());
+        app.view_composites.rendering_window = Some(window);
+        let mut out = ctx.run_ui(input, |ui| {
+            secondary_edit(&mut app, ui.ctx());
+            secondary_edit(&mut app, ui.ctx());
+            assert_eq!(app.ui.notices.len(), 1);
+            assert_eq!(app.ui.notices[0].window, Some(window));
+            show_for_window(&mut app, ui.ctx(), None);
+            assert!(app.ui.notices[0].shown_at.is_none());
+            show_for_window(&mut app, ui.ctx(), Some(window));
+            assert!(app.ui.notices[0].shown_at.is_some());
+        });
+        out.textures_delta.clear();
+    }
 
     #[test]
     fn wayland_session_does_not_post_unavailable_notice() {
@@ -410,13 +470,13 @@ mod tests {
         let mut app = PhotocraftApp::new(Session::new(), Services::default());
         post(&mut app, "Transient", Vec::new(), false, None);
         // The first draw stamps the timer and schedules the hide.
-        assert_eq!(expire(&mut app, 100.0, false, false, true, 6.0), Some(6.0));
+        assert_eq!(expire(&mut app, None, 100.0, false, false, true, 6.0), Some(6.0));
         assert_eq!(app.ui.notices.len(), 1);
         // Still there just before the delay, the next repaint a second away.
-        assert_eq!(expire(&mut app, 105.0, false, false, true, 6.0), Some(1.0));
+        assert_eq!(expire(&mut app, None, 105.0, false, false, true, 6.0), Some(1.0));
         assert_eq!(app.ui.notices.len(), 1);
         // Gone once the delay has elapsed.
-        assert_eq!(expire(&mut app, 106.0, false, false, true, 6.0), None);
+        assert_eq!(expire(&mut app, None, 106.0, false, false, true, 6.0), None);
         assert!(app.ui.notices.is_empty());
     }
 
@@ -426,7 +486,7 @@ mod tests {
         post(&mut app, "Transient", Vec::new(), false, None);
         // While the pointer rests on the stack the timer keeps resetting: it never expires.
         for t in [5.0, 6.0, 7.0, 100.0] {
-            assert_eq!(expire(&mut app, t, true, false, true, 6.0), None, "paused at {t}");
+            assert_eq!(expire(&mut app, None, t, true, false, true, 6.0), None, "paused at {t}");
             assert_eq!(app.ui.notices.len(), 1, "still shown at {t}");
         }
     }
@@ -436,10 +496,10 @@ mod tests {
         let mut app = PhotocraftApp::new(Session::new(), Services::default());
         post(&mut app, "Transient", Vec::new(), false, None);
         // Hovering starts the pause...
-        assert_eq!(expire(&mut app, 0.0, true, false, true, 6.0), None);
+        assert_eq!(expire(&mut app, None, 0.0, true, false, true, 6.0), None);
         // ...and the pointer then rests still for far longer than the delay, so no frame
         // refreshes the stamp. The leave frame must restart the timer, not expire at once.
-        assert_eq!(expire(&mut app, 10.0, false, true, true, 6.0), Some(6.0));
+        assert_eq!(expire(&mut app, None, 10.0, false, true, true, 6.0), Some(6.0));
         assert_eq!(app.ui.notices.len(), 1, "leaving a hover is not elapsed time");
     }
 
@@ -447,8 +507,8 @@ mod tests {
     fn autohide_can_be_switched_off() {
         let mut app = PhotocraftApp::new(Session::new(), Services::default());
         post(&mut app, "Persistent", Vec::new(), false, None);
-        assert_eq!(expire(&mut app, 0.0, false, false, false, 6.0), None);
-        assert_eq!(expire(&mut app, 1_000_000.0, false, false, false, 6.0), None);
+        assert_eq!(expire(&mut app, None, 0.0, false, false, false, 6.0), None);
+        assert_eq!(expire(&mut app, None, 1_000_000.0, false, false, false, 6.0), None);
         assert_eq!(app.ui.notices.len(), 1, "off: the notice stays until dismissed");
     }
 

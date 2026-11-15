@@ -189,10 +189,11 @@ fn secondary_keys(app: &mut PhotocraftApp, ctx: &egui::Context, docked: Option<u
     }
     let focus = crate::shortcut_dispatch::Focus::of(ctx);
     let bindings = crate::shortcut_dispatch::bindings(app);
-    let commands: Vec<String> = ctx.input_mut(|input| {
+    let (commands, blocked) = ctx.input_mut(|input| {
         let mut commands = Vec::new();
+        let mut blocked = false;
         input.events.retain(|event| {
-            let egui::Event::Key { key, modifiers, pressed: true, .. } = event else { return true };
+            let egui::Event::Key { key, modifiers, pressed: true, repeat, .. } = event else { return true };
             let matched = bindings.iter().find(|(_, sc)| focus.allows(sc) && key_matches(sc, *key, *modifiers));
             if let Some((id, _)) = matched
                 && (PhotocraftApp::secondary_view_command(id) || id == "window.focusMainCanvas" || (docked.is_some() && crate::menus::main_shell_command(id)))
@@ -202,10 +203,21 @@ fn secondary_keys(app: &mut PhotocraftApp, ctx: &egui::Context, docked: Option<u
                 }
                 return false;
             }
+            if let Some((id, _)) = matched
+                && !repeat
+                && !id.starts_with("view.")
+                && crate::menus::guard_secondary_menu(app, id).is_err()
+                && crate::menus::is_enabled(app, id)
+            {
+                blocked = true;
+            }
             true
         });
-        commands
+        (commands, blocked)
     });
+    if blocked {
+        crate::notices::secondary_edit(app, ctx);
+    }
     for id in commands {
         let invoke = |app: &mut PhotocraftApp| crate::menus::invoke(app, ctx, &id, json!({}));
         let result = if let Some(window) = docked.filter(|_| PhotocraftApp::secondary_view_command(&id)) {

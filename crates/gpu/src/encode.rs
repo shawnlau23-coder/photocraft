@@ -158,7 +158,11 @@ impl Compositor {
     ) -> Result<Stats, Unsupported> {
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
-        let plan = plan(doc)?;
+        let plan = plan(doc).inspect_err(|_| {
+            // Unsupported stacks fall back before recording begins. Drop only this
+            // document's cached composite, leaving valid shared source resources resident.
+            self.prefix.forget(doc.id);
+        })?;
         self.check_fx(doc, &plan)?;
         self.pattern_mode = doc.pixel_format().mode;
         self.pattern_doc = doc.id;

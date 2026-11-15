@@ -8,6 +8,11 @@
 # (and whenever the AppImage's path changes) install the .desktop entry and the
 # hicolor icons into $XDG_DATA_HOME, then launch. Every failure here must leave
 # the launch untouched. Opt out with PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1.
+#
+# packaging/linux/package.sh rewrites the DESK_ID line below for the "PhotoCraft
+# with SGL Tools" edition, so that AppImage integrates its own .desktop and icon
+# names beside an installed PhotoCraft's rather than over them; the rest of this
+# script is identical for both editions.
 
 set -u
 

@@ -217,10 +217,10 @@ fn open_filters_keep_literal_extensions_on_windows_and_macos() {
 }
 
 #[test]
-fn native_services_provide_update_transport() {
+fn sgl_native_services_disable_upstream_updates() {
     let services = native(None);
-    assert!(services.check_updates.is_some());
-    assert!(services.last_update.is_some());
+    assert!(services.check_updates.is_none());
+    assert!(services.last_update.is_none());
 }
 
 #[test]

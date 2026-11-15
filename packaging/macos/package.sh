@@ -4,6 +4,10 @@
 #   $DIST/photocraft-<version>-macos-<arch>.dmg          PhotoCraft.app on a drag-to-Applications DMG
 #   $DIST/photocraft-cli-<version>-macos-<arch>.zip      the headless CLI
 #
+# With SGL_EDITION set in the environment, the DMG is the separate "PhotoCraft with SGL Tools"
+# product (its own bundle identifier and volume name) and is named
+# $DIST/photocraft-sgl-<version>-macos-<arch>.dmg; the CLI zip is unchanged.
+#
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 #
 # Signing (env):
@@ -17,13 +21,35 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/macos"
 
+# The "PhotoCraft with SGL Tools" edition (SGL_EDITION set in the environment — the SGL job sets it,
+# together with PHOTOCRAFT_SGL_EDITION for cargo, in .github/workflows/sgl-packages.yml). It is the
+# same universal binary with its own bundle identity: a distinct CFBundleIdentifier is what keeps
+# LaunchServices, the app's own settings folder (apps/photocraft/src/app_dirs.rs) and its document
+# handling separate from an installed upstream PhotoCraft, instead of the two merging into one app.
+# Signing, notarization and the `hdiutil create -srcfolder` path are identical either way.
+if [[ -n "${SGL_EDITION:-}" ]]; then
+  APP_NAME="PhotoCraft with SGL Tools"
+  PLIST="$HERE/Info.plist.sgl.in"
+  VOLNAME="PhotoCraft with SGL Tools"
+  DMG_BASE="photocraft-sgl"
+  CLI_ID="ai.storyteller.photocraft.sgl-cli"
+  LAYOUT="$HERE/dmg/dmg-layout.sgl.DS_Store"
+else
+  APP_NAME="PhotoCraft"
+  PLIST="$HERE/Info.plist.in"
+  VOLNAME="PhotoCraft"
+  DMG_BASE="photocraft"
+  CLI_ID="ai.storyteller.photocraft-cli"
+  LAYOUT="$HERE/dmg/dmg-layout.DS_Store"
+fi
+
 ARCH=universal
 SKIP_BUILD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -39,8 +65,8 @@ export MACOSX_DEPLOYMENT_TARGET=11.0
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
-APP="$WORK/PhotoCraft.app"
-DMG="$DIST/photocraft-$VERSION-macos-$ARCH.dmg"
+APP="$WORK/$APP_NAME.app"
+DMG="$DIST/$DMG_BASE-$VERSION-macos-$ARCH.dmg"
 CLI_ZIP="$DIST/photocraft-cli-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
@@ -52,7 +78,7 @@ else
   warn "macOS: APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID incomplete; signed but not notarized"
 fi
 
-echo "==> PhotoCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
+echo "==> $APP_NAME $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
 
 # ---- build -------------------------------------------------------------------------------------
 if [[ "$SKIP_BUILD" = 0 ]]; then
@@ -131,13 +157,13 @@ if [[ -n "${CRAFT_FONTS_DIR:-}" ]]; then
 fi
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
   -e "s/@BUILD_SHA@/${PHOTOCRAFT_BUILD_SHA:-unknown}/g" \
-  "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
+  "$PLIST" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
 # The bundled CLI is nested executable code; sign it before sealing the app bundle.
-sign --options runtime --identifier ai.storyteller.photocraft-cli "$APP/Contents/MacOS/photocraft-cli"
+sign --options runtime --identifier "$CLI_ID" "$APP/Contents/MacOS/photocraft-cli"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/PhotoCraft"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
@@ -153,19 +179,51 @@ fi
 echo "==> building $DMG"
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/PhotoCraft.app"
+if [[ "$NOTARIZE" = 1 ]]; then
+  ditto "$APP" "$STAGE/$APP_NAME.app"
+else
+  # Exclude Finder metadata and resource forks from the unsigned-distribution copy.
+  ditto --noextattr --norsrc "$APP" "$STAGE/$APP_NAME.app"
+fi
+codesign --verify --strict --deep "$STAGE/$APP_NAME.app"
 ln -s /Applications "$STAGE/Applications"
 # Finder window layout: background, icon size and positions (packaging/macos/dmg/README.md).
-mkdir -p "$STAGE/.background"
-cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
-cp "$HERE/dmg/dmg-layout.DS_Store" "$STAGE/.DS_Store"
-rm -f "$DMG" "$WORK/raw.dmg"
-# makehybrid + convert builds the image without attaching a device, unlike `create -srcfolder`,
-# which is flaky on CI runners ("Resource busy") and hangs in sandboxed sessions.
+# The layout's alias names the volume and the app bundle, so each edition needs its own file:
+# `dmg/generate.py` writes both. Without the one for this edition the image simply opens in
+# Finder's default layout (icons in a row, no background art) — nothing about the app or its
+# signature changes, so an un-regenerated layout never fails a release build.
+if [[ -f "$LAYOUT" ]]; then
+  mkdir -p "$STAGE/.background"
+  cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
+  cp "$LAYOUT" "$STAGE/.DS_Store"
+else
+  warn "no $(basename "$LAYOUT") (run packaging/macos/dmg/generate.py); the DMG opens in Finder's default layout"
+fi
+rm -f "$DMG"
+# `hdiutil create -srcfolder` writes the staged files as they are. `makehybrid -hfs` stamped a
+# com.apple.FinderInfo (Finder location -1,-1) on every file it wrote, which `codesign --verify
+# --strict` rejects as "Finder information, or similar detritus" on the app in the image and on
+# a copy installed from it (storytold/photocraft#3034; fix follows storytold/pdfcraft#823).
+# `create` attaches a device while it copies, which fails now and then on CI runners ("Resource
+# busy"), so it gets up to five tries with growing pauses.
 # The volume name has no version: .DS_Store finds the background through an alias that includes it.
-hdiutil makehybrid -hfs -hfs-volume-name "PhotoCraft" -hfs-openfolder "$STAGE" -o "$WORK/raw.dmg" "$STAGE"
-hdiutil convert "$WORK/raw.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG"
-rm -f "$WORK/raw.dmg"
+# Usage: hdiutil_retry <what> <hdiutil args...>; tries five times before failing the build.
+hdiutil_retry() {
+  local what="$1" attempt
+  shift
+  for attempt in 1 2 3 4 5; do
+    if hdiutil "$@"; then
+      return 0
+    fi
+    if [[ "$attempt" = 5 ]]; then
+      echo "hdiutil $what failed after 5 attempts" >&2
+      return 1
+    fi
+    warn "hdiutil $what failed (attempt $attempt of 5); retrying in $((attempt * 10))s"
+    sleep $((attempt * 10))
+  done
+}
+hdiutil_retry create create -srcfolder "$STAGE" -volname "$VOLNAME" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG"
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 if [[ "$NOTARIZE" = 1 ]]; then
@@ -181,8 +239,9 @@ mkdir -p "$CLI_DIR"
 cp "$WORK/bin/photocraft-cli" "$CLI_DIR/"
 copy_docs "$CLI_DIR"
 # Same Developer ID and hardened runtime as the app, with an explicit reverse-DNS identifier
-# (codesign would otherwise use the bare file name).
-sign --options runtime --identifier ai.storyteller.photocraft-cli "$CLI_DIR/photocraft-cli"
+# (codesign would otherwise use the bare file name). The SGL build signs its copy with its own
+# identifier, so no artifact of this edition carries another product's code identity.
+sign --options runtime --identifier "$CLI_ID" "$CLI_DIR/photocraft-cli"
 codesign --verify --strict --verbose=2 "$CLI_DIR/photocraft-cli"
 rm -f "$CLI_ZIP"
 ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"

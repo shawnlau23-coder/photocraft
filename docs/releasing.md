@@ -183,12 +183,15 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   as the cached icon filename, and an extensionless filename can render as a blank document
   icon. `packaging/windows/check-icons.ps1` checks the references and extensions in CI;
   `package.ps1` also validates the built MSI with ICE50 before signing it.
-- **Portable zip:** it ships `packaging/windows/portable.txt` beside `photocraft.exe`. That
+- **Portable zip:** it ships the edition's portable marker beside `photocraft.exe` —
+  `packaging/windows/portable.txt`, or `portable-sgl.txt` when built with `-Edition sgl` — always
+  stored as `portable.txt` in the archive, because that is the name the app looks for. That
   marker (or a `PhotoCraft.portable` file) switches on portable mode: preferences, presets,
   recovery autosaves and the GPU startup marker go to `PhotoCraftData\` next to the exe instead
-  of `%APPDATA%\Photocraft`. If that folder isn't writable the app warns and uses `%APPDATA%`.
-  The MSI has no marker. The logic is in `apps/photocraft/src/app_dirs.rs` and works the same
-  on macOS and Linux.
+  of `%APPDATA%\Photocraft` and `%LOCALAPPDATA%\Photocraft\Recovery`; the SGL build's folders are
+  `%APPDATA%\PhotoCraftSGL` and `%LOCALAPPDATA%\PhotoCraftSGL\Recovery`. If that folder isn't
+  writable the app warns and uses `%APPDATA%`. The MSI has no marker. The logic is in
+  `apps/photocraft/src/app_dirs.rs` and works the same on macOS and Linux.
 - **Symbols zip:** `photocraft.pdb` and `photocraft_cli.pdb` from the same release build, plus
   `packaging/windows/symbols.txt` (how to load them in a profiler). An optional download, so the
   MSI and portable zip stay their size; it lets anyone profile the released exes with function
