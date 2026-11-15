@@ -888,13 +888,14 @@ jobs:
           $zip = $zipFiles[0].FullName
           $installLog = Join-Path $env:RUNNER_TEMP 'msi-install.log'
           # Scope properties are separate arguments, so no shell quoting sits between msiexec and the
-          # value: ALLUSERS= (empty) plus MSIINSTALLPERUSER=1 is how "Only for me" is asked of a
-          # perUserOrMachine package. Tested locally with a program that parses its command line the
-          # way msiexec does: this form and the earlier one-string form both arrive as exactly
-          # "ALLUSERS=" and "MSIINSTALLPERUSER=1", so the previous failure was not lost quoting. The
-          # echoed command line, the copied log and the candidate folders below are what say where the
-          # files actually went.
-          $installArgs = @('/i', ('"' + $msi + '"'), '/qn', '/l*v', ('"' + $installLog + '"'), 'ALLUSERS=', 'MSIINSTALLPERUSER=1')
+          # value. Do NOT pass ALLUSERS here: the package already carries ALLUSERS=2 plus
+          # MSIINSTALLPERUSER=1 (Package Scope="perUserOrMachine"; check-install-policy.ps1 requires
+          # both in the Property table), and that default is the silent "Only for me". Windows
+          # Installer honours MSIINSTALLPERUSER only while ALLUSERS is 2, so overriding ALLUSERS to
+          # an empty string erases the 2, the per-user request is ignored, and an elevated runner
+          # installs machine-wide - which this step once reported as a warning. The echoed command
+          # line, the copied log and the candidate folders below are what say where the files went.
+          $installArgs = @('/i', ('"' + $msi + '"'), '/qn', '/l*v', ('"' + $installLog + '"'), 'MSIINSTALLPERUSER=1')
           Write-Output ('msiexec ' + ($installArgs -join ' '))
           $install = Start-Process msiexec.exe -ArgumentList $installArgs -Wait -PassThru
           # The verbose log is kept whether the install succeeded or not: the earlier report was
@@ -941,10 +942,12 @@ jobs:
           Write-Output ('  installed at: ' + $dir)
           $notes += 'installed at: ' + $dir
           if ($dir -notlike ('*Programs\ArtCraft\PhotoCraft with SGL Tools')) {
-            # Say what happened and keep going: the settings-folder proof below is still this
-            # edition's own, but a machine-wide install means the "Only for me" request needs a look.
-            Write-Output '::warning::msiexec installed machine-wide although per-user scope was requested; see msi-install.log in the diagnostics artifact.'
-            $notes += 'warning: installed machine-wide although per-user scope was requested'
+            # A machine-wide landing is now a regression, not a note: the package defaults to the
+            # per-user context (the same contract check-install-policy.ps1 enforces on the Property
+            # table), and the VERIFY.txt text below claims a per-user install. The diagnostics
+            # artifact keeps msi-install.log, which names the context msiexec actually used.
+            Set-Content -Path (Join-Path $diagnostics 'verify-notes.txt') -Value $notes
+            throw ('the silent install landed machine-wide at ' + $dir + ' although the package defaults to per-user; see msi-install.log in the diagnostics artifact')
           }
           $versionInfo = (Get-Item $exe).VersionInfo
           Write-Output ('  installed executable: ' + $versionInfo.FileVersion + ' / ' + $versionInfo.ProductName)
