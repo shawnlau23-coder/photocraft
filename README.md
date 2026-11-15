@@ -108,15 +108,21 @@ This is particularly useful when switching between the main canvas and floating 
 
 ## Downloading PhotoCraft with SGL Tools
 
-The first release candidate is **v0.22.0-rc.1 for Windows x64**.
+The current build is the **v0.22.0 prerelease** — the first packaging for all three platforms. It is a prerelease because the binaries are still unsigned and not notarized.
 
-Download the portable ZIP from the GitHub Releases page, extract the complete archive into a folder, and run the included PhotoCraft executable.
+**Release page and downloads:** https://github.com/shawnlau23-coder/photocraft/releases/tag/sgl-v0.22.0
 
-No installation or Rust development environment is required.
+| Platform | Available | How to run it |
+| --- | --- | --- |
+| Windows x64 | MSI installer · portable ZIP | The installer's default scope is "Only for me", installing under your own profile; choosing "Everyone" installs machine-wide. For the portable ZIP, extract the whole archive into a folder and run `photocraft.exe`. |
+| macOS Universal (Apple silicon and Intel) | DMG · CLI ZIP | Drag the app from the DMG into Applications. The CLI ZIP is the headless `photocraft-cli`. |
+| Linux x86_64 | AppImage · tar.gz | `chmod +x` the AppImage and run it. The tarball is a `bin/` plus `share/` tree to copy into a prefix. |
 
-The release candidate is unsigned and intended for testing.
+No installation or Rust development environment is required. Every download's SHA-256 digest is listed in `SHA256SUMS-release.txt` on the release page above.
 
-**Downloads:** https://github.com/shawnlau23-coder/photocraft/releases
+### Running it beside an installed PhotoCraft
+
+PhotoCraft with SGL Tools has its own application identity, settings folder and file-type registrations, so it is meant to sit beside an existing PhotoCraft rather than replace it. That side-by-side case has not been fully tested by hand yet. On Linux, the tarball writes `bin/photocraft` and `share/doc/photocraft/` — the same paths an upstream tarball install uses — so choose the **AppImage** if you want both editors on one machine with no chance of overwriting the other's files.
 
 ### Windows Security Notice
 
@@ -128,11 +134,13 @@ If you downloaded it from the official GitHub release and trust the source, you 
 
 This warning does not necessarily indicate that the application is malicious.
 
-For additional verification, the Windows ZIP has the following SHA-256 checksum:
-
-`d2b32be1ced4417d6e70f461dea71e1ec3d3129d8ed1152c6e7af81c6834c523`
+For additional verification, check the file you downloaded against `SHA256SUMS-release.txt` on the release page above.
 
 Some Windows 11 systems with Smart App Control enabled may block unsigned applications without offering a Run anyway option.
+
+### macOS Security Notice
+
+The macOS app bundle is ad-hoc signed and **not notarized**, so Gatekeeper blocks the first launch with "cannot be opened because the developer cannot be verified". The release page lists the options and what each one has and has not proved.
 
 ## About the Project
 
