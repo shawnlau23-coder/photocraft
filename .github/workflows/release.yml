@@ -58,6 +58,10 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/development/sgl-tools'
     permissions:
       contents: read
+      # GITHUB_TOKEN permissions can be maintained or reduced through a reusable-workflow chain,
+      # never elevated: the verify stage of that workflow downloads a build run's artifacts with gh,
+      # which needs actions: read granted here as well or the download is refused.
+      actions: read
     uses: ./.github/workflows/sgl-packages.yml
     with:
       macos-only: ${{ inputs.version == 'macos-only' }}
