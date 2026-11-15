@@ -701,7 +701,13 @@ jobs:
           # A fresh runner: the build leg's -dev packages are not here, and resolving the AppImage's
           # libraries or starting it needs the runtime halves. Nothing is compiled in this stage.
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon0 libwayland-client0 libx11-6 libxrandr2 libxi6 libgl1 \
+          # The set is what apps/photocraft/src/linux_libs.rs probes before it will start, so the
+          # launch below is refused for the right reason. This list had no libxkbcommon-x11-0, and
+          # the app stopped the run with exactly that name (run 43673873957); the rest of the X11
+          # group is named out loud rather than left to whatever the runner image happens to carry,
+          # so image drift shows up here instead of as a launch failure three steps later.
+          sudo apt-get install -y libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 \
+            libx11-6 libx11-xcb1 libxcb1 libxcursor1 libxrandr2 libxi6 libegl1 libgl1 \
             libgtk-3-0 libasound2 libudev1 libvulkan1 xvfb squashfs-tools file
       - name: Check the Linux packages' identity and libraries
         if: runner.os == 'Linux'
@@ -784,33 +790,81 @@ jobs:
           # identity failure - the packaged files' identity was checked in the step above.
           cd "$RUNNER_TEMP"
           test -x squashfs-root/AppRun
+          runner_home="$HOME"
           fake_home="$RUNNER_TEMP/fake-home"
           rm -rf "$fake_home"
           mkdir -p "$fake_home"
           launch_out="$RUNNER_TEMP/linux-launch.txt"
+          # This wrapper's only job is to record the environment the app really started with.
+          # app_dirs::platform_dir prefers XDG_CONFIG_HOME and falls back to HOME, and the run before
+          # this one resolved /home/runner/.config with HOME pointed at a throwaway folder. Pinning
+          # both variables and printing what survived is what separates "the harness lost the
+          # override" from "the app ignored it" - guessing which happened is what this exists to
+          # avoid, and the answer decides how the folder below is judged.
+          cat > "$RUNNER_TEMP/launch-probe.sh" <<'PROBE'
+          #!/usr/bin/env bash
+          echo "launch env: HOME=$HOME XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-unset} DISPLAY=${DISPLAY:-unset} APPIMAGE=${APPIMAGE:-unset}"
+          exec "$@"
+          PROBE
+          chmod +x "$RUNNER_TEMP/launch-probe.sh"
           status=0
-          HOME="$fake_home" timeout 120 xvfb-run -a ./squashfs-root/AppRun >"$launch_out" 2>&1 || status=$?
-          echo "launcher exit status: $status"
+          HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" \
+            timeout 120 xvfb-run -a "$RUNNER_TEMP/launch-probe.sh" "$PWD/squashfs-root/AppRun" >"$launch_out" 2>&1 || status=$?
+          note=''
+          case "$status" in
+            124 | 137 | 143) note=' (killed by the 120 s limit, so it stayed up that long)' ;;
+          esac
+          echo "launcher exit status: $status$note"
           sed 's/^/  launcher: /' "$launch_out"
           # Absolute: this step has changed directory to the runner's temp dir.
           cp "$launch_out" "$GITHUB_WORKSPACE/verify-diagnostics/linux-launch.txt" 2>/dev/null || true
-          expected="$fake_home/.config/photocraft-sgl/logs/photocraft.log"
-          echo "  what the run left under the throwaway HOME:"
-          find "$fake_home" -maxdepth 4 -type d \( -name 'photocraft*' -o -name '.config' -o -name '.local' \) | sed 's/^/    dir: /'
-          find "$fake_home" -maxdepth 6 -name 'photocraft.log' | sed 's/^/    log: /'
-          if [[ ! -f "$expected" ]]; then
+          # The folder in the app's own words, not one this step assumed: that line is the claim.
+          settings="$(sed -n 's/.*settings directory ([^)]*): Some("\(.*\)").*/\1/p' "$launch_out" | head -1)"
+          if [[ -z "$settings" ]]; then
             if [[ "$status" != 0 ]]; then
-              echo "error: the launcher exited with status $status and wrote no log anywhere; this is a startup failure, not evidence about the settings folder (launcher output above)" >&2
+              echo "error: the launcher exited $status without ever naming a settings directory: a startup failure, not evidence about the settings folder (launcher output above)" >&2
             else
-              echo "error: the app ran (status 0) but never wrote $expected; where its data actually went is listed above" >&2
+              echo "error: the app ran (status 0) and never named a settings directory (launcher output above)" >&2
             fi
             exit 1
           fi
-          echo "  the AppImage run wrote $expected"
-          if [[ -e "$fake_home/.config/photocraft" ]]; then
-            echo "error: upstream's ~/.config/photocraft appeared during this edition's run" >&2
+          echo "  the app resolved its settings folder to: $settings"
+          case "$settings" in
+            */photocraft-sgl) ;;
+            */photocraft)
+              echo "error: this edition resolved upstream's settings folder ($settings), not photocraft-sgl" >&2
+              exit 1 ;;
+            *)
+              echo "error: the app put its settings somewhere else entirely ($settings); this step proves the folder name, so portable or overridden runs need their own check" >&2
+              exit 1 ;;
+          esac
+          # Judge that folder against what the app was actually given, from the wrapper's own line.
+          pinned=0
+          grep -qF "HOME=$fake_home XDG_CONFIG_HOME=$fake_home/.config" "$launch_out" && pinned=1
+          if [[ "$settings" != "$fake_home/.config/photocraft-sgl" ]]; then
+            if [[ "$pinned" == 1 ]]; then
+              echo "error: HOME and XDG_CONFIG_HOME both reached the launched process, yet the app chose $settings over $fake_home/.config/photocraft-sgl" >&2
+              echo "  what the run left under the throwaway HOME:" >&2
+              find "$fake_home" -maxdepth 6 | sed 's/^/    /' >&2
+              exit 1
+            fi
+            echo "  note: the throwaway pin never reached the app (launch env line above), so it used the runner account's own folder; the folder-name proof above is what this run can show"
+          fi
+          if [[ ! -f "$settings/logs/photocraft.log" ]]; then
+            echo "error: the app named $settings and no logs/photocraft.log appeared in it" >&2
+            echo "  what the run left under the throwaway HOME:"
+            find "$fake_home" -maxdepth 4 -type d \( -name 'photocraft*' -o -name '.config' -o -name '.local' \) | sed 's/^/    dir: /'
+            find "$fake_home" -maxdepth 6 -name 'photocraft.log' | sed 's/^/    log: /'
             exit 1
           fi
+          echo "  and wrote $settings/logs/photocraft.log"
+          for probe_home in "$fake_home" "$runner_home"; do
+            if [[ -e "$probe_home/.config/photocraft" ]]; then
+              echo "error: upstream's $probe_home/.config/photocraft appeared during this edition's run" >&2
+              exit 1
+            fi
+          done
+          echo "  and neither home grew upstream's photocraft folder"
       - name: Install, run and uninstall the MSI on the runner
         if: runner.os == 'Windows'
         shell: pwsh
