@@ -467,7 +467,12 @@ jobs:
     # verify what was built. No verification result can lose the bundle the build stage uploaded, and
     # a failed plan (a bad run id, a wrong commit) stops the legs instead of running them blind.
     needs: [plan, build]
-    if: ${{ needs.plan.result == 'success' }}
+    # !cancelled() is what makes verify-only work at all: in that mode the build job is skipped, and
+    # a skipped dependency skips its dependents unless the condition says otherwise - with a plain
+    # needs.plan.result test here, every verification-only run verified nothing and still reported
+    # success. It still requires plan to have passed, and it deliberately runs whatever the build
+    # outcome was, so each platform's leg answers for itself (see the fetch step).
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
