@@ -152,4 +152,45 @@ rm -f "$am_desktop"
 "$APPDIR/AppRun" >/dev/null || fail "launch after AM removal exited non-zero"
 [[ -f "$DESKTOP" ]] || fail "no desktop entry after the AM launcher was removed"
 
+# 14. The "PhotoCraft with SGL Tools" edition: packaging/linux/package.sh stages this same AppRun
+#     with its DESK_ID rewritten, and the entry and icons renamed to the SGL id. Integration must
+#     land under the SGL names beside an installed PhotoCraft's - never over them - and an upstream
+#     entry in the menu must not read as "already integrated" (#3623 check is about the same
+#     AppImage path, not about another product's launcher).
+SGL_ID=ai.storyteller.photocraft.sgl
+sgl_dir="$TMP/sgl.AppDir"
+mkdir -p "$sgl_dir/usr/bin"
+sed "s|^DESK_ID=.*|DESK_ID=$SGL_ID|" "$HERE/AppRun" >"$sgl_dir/AppRun"
+chmod 755 "$sgl_dir/AppRun"
+install -Dm644 "$HERE/$SGL_ID.desktop" "$sgl_dir/usr/share/applications/$SGL_ID.desktop"
+mkdir -p "$sgl_dir/usr/share/icons"
+cp -R "$ROOT/assets/app-icon/hicolor" "$sgl_dir/usr/share/icons/"
+for icon in "$sgl_dir"/usr/share/icons/hicolor/*/apps/"$APP_ID".*; do
+  mv "$icon" "${icon%"$APP_ID".*}$SGL_ID.${icon##*.}"
+done
+printf '#!/bin/sh\necho "stub: $*"\n' >"$sgl_dir/usr/bin/photocraft"
+chmod +x "$sgl_dir/usr/bin/photocraft"
+sgl_image="$TMP/photocraft-sgl.AppImage"
+: >"$sgl_image"
+sgl_home="$TMP/sgl-home"
+sgl_data="$sgl_home/.local/share"
+mkdir -p "$sgl_data/applications"
+printf '[Desktop Entry]
+Type=Application
+Name=PhotoCraft
+Exec=photocraft %%F
+Icon=%s
+' "$APP_ID" >"$sgl_data/applications/$APP_ID.desktop"
+out="$(APPIMAGE="$sgl_image" HOME="$sgl_home" XDG_DATA_HOME="$sgl_data" "$sgl_dir/AppRun" open file.png)" || fail "SGL AppRun exited non-zero"
+[[ "$out" = "stub: open file.png" ]] || fail "SGL arguments not forwarded: $out"
+[[ -f "$sgl_data/applications/$SGL_ID.desktop" ]] || fail "the SGL entry was not installed under its own desktop id"
+grep -Fxq "Icon=$SGL_ID" "$sgl_data/applications/$SGL_ID.desktop" || fail "the SGL entry lost its Icon"
+grep -Fxq "StartupWMClass=$SGL_ID" "$sgl_data/applications/$SGL_ID.desktop" || fail "the SGL entry lost its StartupWMClass"
+[[ -f "$sgl_data/icons/hicolor/256x256/apps/$SGL_ID.png" ]] || fail "the SGL icons were not installed under the SGL name"
+[[ ! -e "$sgl_data/icons/hicolor/256x256/apps/$APP_ID.png" ]] || fail "the SGL run installed an icon under upstream's name"
+grep -Fxq 'Exec=photocraft %F' "$sgl_data/applications/$APP_ID.desktop" || fail "the SGL run rewrote upstream's desktop entry"
+if command -v desktop-file-validate >/dev/null; then
+  desktop-file-validate "$sgl_data/applications/$SGL_ID.desktop" || fail "the SGL desktop entry is invalid"
+fi
+
 echo "AppRun desktop integration ok"

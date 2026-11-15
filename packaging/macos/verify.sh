@@ -37,7 +37,10 @@ case "$ARCH" in
   *) echo "unknown --arch $ARCH" >&2; exit 2 ;;
 esac
 
-DMG="$DIST/photocraft-$VERSION-macos-$ARCH.dmg"
+# package.sh names the "PhotoCraft with SGL Tools" DMG photocraft-sgl-*; the CLI zip is the same
+# artifact for both editions. Everything checked below is found by these two names.
+if [[ -n "${SGL_EDITION:-}" ]]; then DMG_BASE=photocraft-sgl; else DMG_BASE=photocraft; fi
+DMG="$DIST/$DMG_BASE-$VERSION-macos-$ARCH.dmg"
 CLI_ZIP="$DIST/photocraft-cli-$VERSION-macos-$ARCH.zip"
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 STRICT=0

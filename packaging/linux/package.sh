@@ -7,6 +7,11 @@
 #   $DIST/photocraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
 #   $DIST/photocraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
 #
+# With SGL_EDITION set in the environment, the AppImage and tarball are the separate "PhotoCraft
+# with SGL Tools" product instead: photocraft-sgl-<version>-linux-<arch>.* with its own desktop id,
+# icon names, metainfo component and update-info glob. deb/rpm are refused for it (see the note in
+# that section). Unset, everything here is upstream's exactly as before.
+#
 # Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
 #
 # Needs: cargo; nfpm for deb/rpm (https://nfpm.goreleaser.com). By default AppImage tooling
@@ -23,7 +28,25 @@ set -euo pipefail
 HERE="$ROOT/packaging/linux"
 # shellcheck source=verified-download.sh
 . "$HERE/verified-download.sh"
-APP_ID=ai.storyteller.photocraft
+# The "PhotoCraft with SGL Tools" edition (SGL_EDITION set by the SGL job, which also sets
+# PHOTOCRAFT_SGL_EDITION for cargo so the binary carries the matching app id, settings folder and
+# single-instance files - crates/ui-egui/src/os_window.rs, apps/photocraft/src/app_dirs.rs). Every
+# installed identity name follows APP_ID: the .desktop file, the metainfo component, the hicolor
+# icon names and AppRun's first-run integration all get this edition's own names, so they land
+# beside upstream's instead of replacing them, and the artifacts are named photocraft-sgl-* so a
+# person can tell the two downloads apart. Unset, everything below is upstream's exactly as before.
+if [[ -n "${SGL_EDITION:-}" ]]; then
+  APP_ID=ai.storyteller.photocraft.sgl
+  APP_NAME="PhotoCraft with SGL Tools"
+  BASENAME_PREFIX=photocraft-sgl
+else
+  APP_ID=ai.storyteller.photocraft
+  APP_NAME=PhotoCraft
+  BASENAME_PREFIX=photocraft
+fi
+# The icon artwork is upstream's and is named after upstream's id in the repository; the SGL stage
+# renames copies of it (no second set of artwork to keep in step).
+ASSET_ID=ai.storyteller.photocraft
 
 SKIP_BUILD=0
 FORMATS="appimage deb rpm tar"
@@ -31,7 +54,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
-    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -44,9 +67,9 @@ case "$ARCH" in
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
 export PHOTOCRAFT_MAINTAINER="${PHOTOCRAFT_MAINTAINER:-PhotoCraft maintainers <photocraft@storyteller.ai>}"
-BASENAME="photocraft-$VERSION-linux-$ARCH"
+BASENAME="$BASENAME_PREFIX-$VERSION-linux-$ARCH"
 
-echo "==> PhotoCraft $VERSION for Linux $ARCH ($FORMATS)"
+echo "==> $APP_NAME $VERSION for Linux $ARCH ($FORMATS)"
 
 # The man-and-completions example writes photocraft-cli's man pages and shell completions below. It
 # is built in its own cargo run: built with the binaries, its dev-dependencies' features would be
@@ -70,12 +93,32 @@ install -Dm755 "$BIN/photocraft" "$STAGE/usr/bin/photocraft"
 install -Dm755 "$BIN/photocraft-cli" "$STAGE/usr/bin/photocraft-cli"
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/photocraft" "$STAGE/usr/bin/photocraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
-install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
+# The shared-mime package stays upstream's alone: the type definitions (application/x-photocraft,
+# image/qoi, ...) are not per-product, and a second copy of the same definitions under another file
+# name would leave two packages maintaining one set of types. The SGL .desktop still lists the same
+# MimeType= values, so this edition appears in "Open With" without owning anything.
+if [[ -z "${SGL_EDITION:-}" ]]; then
+  install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
+fi
 mkdir -p "$STAGE/usr/share/metainfo"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$PHOTOCRAFT_BUILD_DATE/g" \
   "$HERE/$APP_ID.metainfo.xml.in" >"$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
 mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
+if [[ -n "${SGL_EDITION:-}" ]]; then
+  # Same artwork, staged under this edition's icon name: the .desktop Icon= key and Wayland's
+  # app_id-to-icon lookup both need an icon named after the entry, and renaming copies keeps one
+  # set of artwork in the repository instead of two to keep in step.
+  for icon in "$STAGE"/usr/share/icons/hicolor/*/apps/"$ASSET_ID".*; do
+    mv "$icon" "${icon%"$ASSET_ID".*}$APP_ID.${icon##*.}"
+  done
+  # The glob above matched nothing if upstream's asset names ever change: fail loudly rather than
+  # ship an entry whose Icon= resolves to nothing.
+  test -f "$STAGE/usr/share/icons/hicolor/256x256/apps/$APP_ID.png" || {
+    echo "error: no $ASSET_ID icon under assets/app-icon/hicolor to rename to $APP_ID" >&2
+    exit 1
+  }
+fi
 mkdir -p "$STAGE/usr/share/doc/photocraft"
 copy_docs "$STAGE/usr/share/doc/photocraft"
 # photocraft-cli's man pages and shell completions, from its clap definition, written by the
@@ -119,6 +162,15 @@ fi
 
 # ---- .deb / .rpm --------------------------------------------------------------------------------
 if has deb || has rpm; then
+  if [[ -n "${SGL_EDITION:-}" ]]; then
+    # Refuse rather than build one: nfpm.yaml's package name is `photocraft` and its contents are
+    # /usr/bin/photocraft and friends, so an SGL .deb/.rpm would file-conflict with - and could
+    # replace - an installed upstream PhotoCraft, which is the one thing this edition exists to
+    # avoid. A distro package for the fork needs its own package name, install paths and metadata,
+    # which is separate packaging work; the AppImage and tarball are self-contained trees.
+    echo "error: the SGL edition does not build deb/rpm (upstream's package name and /usr paths would collide); use --formats \"appimage tar\"" >&2
+    exit 1
+  fi
   command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/install/)" >&2; exit 1; }
   export VERSION
   export NFPM_ARCH="$DEB_ARCH"
@@ -143,9 +195,18 @@ if has appimage; then
   # $XDG_DATA_HOME before launching, so Wayland compositors can resolve the window's
   # app_id to our icon instead of the generic Wayland logo (#593; opt-out env in the
   # script header). Logic is covered by packaging/linux/apprun-test.sh.
-  install -Dm755 "$HERE/AppRun" "$APPDIR/AppRun"
+  if [[ -n "${SGL_EDITION:-}" ]]; then
+    # AppRun writes the entry and icons it finds in the AppDir into $XDG_DATA_HOME on first run,
+    # keyed by its DESK_ID: for this edition that must be this edition's id, so the integration
+    # lands beside an installed upstream PhotoCraft's entry instead of overwriting it. One sed over
+    # the same script keeps that logic (and packaging/linux/apprun-test.sh) single-sourced.
+    sed "s|^DESK_ID=.*|DESK_ID=$APP_ID|" "$HERE/AppRun" >"$APPDIR/AppRun"
+    chmod 755 "$APPDIR/AppRun"
+  else
+    install -Dm755 "$HERE/AppRun" "$APPDIR/AppRun"
+  fi
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
-  cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
+  cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$ASSET_ID.png" "$APPDIR/$APP_ID.png"
   ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
 
   # Digests from the official GitHub release asset metadata:
@@ -191,7 +252,9 @@ if has appimage; then
   # next to each AppImage on GitHub Releases. `latest` is the newest published release that is
   # not a pre-release. A fork's builds point at its own releases through GITHUB_REPOSITORY.
   REPO="${GITHUB_REPOSITORY:-storytold/photocraft}"
-  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|photocraft-*-linux-$ARCH.AppImage.zsync"
+  # The glob has to match the published file name, which is $BASENAME below: for the SGL edition
+  # that is photocraft-sgl-*, so its AppImages look for their own updates, not upstream's.
+  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|$BASENAME_PREFIX-*-linux-$ARCH.AppImage.zsync"
   # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
   # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
   # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
