@@ -295,7 +295,9 @@ jobs:
           AppImage: make it executable and run it. On first run it registers its own launcher
           entry and icons (named ai.storyteller.photocraft.sgl) beside an installed PhotoCraft's,
           never over them; set PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1 to skip that.
-          tar.gz: an unpacked FHS tree; copy it anywhere.
+          tar.gz: the installed file tree - bin/ and share/, i.e. the contents of /usr with no
+          /usr prefix inside the archive. Copy its contents into /usr/local, or run
+          bin/photocraft from wherever you extract it.
 
           Both are separate from PhotoCraft: their own settings in ~/.config/photocraft-sgl
           (recovery files in ~/.local/state/photocraft-sgl), their own single-instance files, and
@@ -727,10 +729,40 @@ jobs:
           cli=(photocraft-sgl-*/bin/photocraft-cli)
           test "${#cli[@]}" = 1
           "${cli[0]}" --version
-          tree=(photocraft-sgl-*)
-          test -f "${tree[0]}/usr/share/applications/ai.storyteller.photocraft.sgl.desktop"
-          test -f "${tree[0]}/usr/share/metainfo/ai.storyteller.photocraft.sgl.metainfo.xml"
-          test ! -e "${tree[0]}/usr/share/mime/packages/ai.storyteller.photocraft.xml"
+          # The tarball's top directory *is* the FHS payload: package.sh copies $STAGE/usr to
+          # $BASENAME and tars that (see its header: "plain FHS-style tree (bin/, share/)"), so paths
+          # inside it are share/... and bin/..., not usr/share/... - the AppImage layout above is
+          # genuinely different, because that archive carries /usr itself. A silent test -f with the
+          # wrong prefix failed here with nothing to show; the listing below is what says what the
+          # archive actually holds.
+          # Directory-only glob, and it is reported rather than assumed: a bare photocraft-sgl-* also
+          # matches the archive file itself, and a silent test on that count fails with nothing to read.
+          tree=(photocraft-sgl-*/)
+          if [[ "${#tree[@]}" != 1 ]]; then
+            echo "error: extracting the tarball left ${#tree[@]} directories matching photocraft-sgl-*: ${tree[*]:-none}" >&2
+            exit 1
+          fi
+          tree="${tree[0]%/}"
+          check_in_tar() {
+            if [[ ! -f "$tree/$1" ]]; then
+              echo "error: the tarball has no $1 (looked for $tree/$1)" >&2
+              echo '  the first entries of the archive:' >&2
+              tar -tzf "${archive[0]}" | head -40 | sed 's/^/    /' >&2
+              exit 1
+            fi
+            echo "  tarball contains $1"
+          }
+          check_in_tar bin/photocraft
+          check_in_tar bin/photocraft-cli
+          check_in_tar share/applications/ai.storyteller.photocraft.sgl.desktop
+          check_in_tar share/metainfo/ai.storyteller.photocraft.sgl.metainfo.xml
+          # Upstream's registered names must appear nowhere in this edition's tree - searched in the
+          # archive itself, so the check does not depend on guessing which prefix they would use.
+          if tar -tzf "${archive[0]}" | grep -E 'applications/ai\.storyteller\.photocraft\.desktop$|mime/packages/ai\.storyteller\.photocraft\.xml$'; then
+            echo 'error: an upstream desktop or mime name is present in the tarball' >&2
+            exit 1
+          fi
+          echo "  the tarball carries no upstream desktop or mime name"
       - name: Run the AppImage under Xvfb (settings-folder proof)
         if: runner.os == 'Linux'
         shell: bash
