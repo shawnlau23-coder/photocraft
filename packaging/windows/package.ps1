@@ -65,6 +65,10 @@ $MsiVersion = ($Version -split '-')[0]
 # run identically for both editions.
 if ($Edition -eq 'sgl') {
   $NameBase = 'photocraft-sgl'; $Wxs = 'photocraft-sgl.wxs'; $Wxl = 'photocraft-sgl.en-us.wxl'; $Policy = 'install-policy-sgl.json'
+  # Its portable marker names this edition's own settings and recovery folders, the same split
+  # as the .wxs/.wxl/policy pair above. The file inside the ZIP is still called portable.txt:
+  # that name is what app_dirs.rs looks for, only its instructions differ per edition.
+  $PortableMarker = 'portable-sgl.txt'
   # Compile the SGL identity into the binaries as well as the installer: the app reads this
   # variable at compile time (option_env!) for its settings/recovery folder names and its
   # AppUserModelID, so an installed SGL copy and an installed upstream copy share neither their
@@ -74,6 +78,7 @@ if ($Edition -eq 'sgl') {
   $env:PHOTOCRAFT_SGL_EDITION = '1'
 } else {
   $NameBase = 'photocraft'; $Wxs = 'photocraft.wxs'; $Wxl = 'photocraft.en-us.wxl'; $Policy = 'install-policy.json'
+  $PortableMarker = 'portable.txt'
 }
 
 $Target = switch ($Arch) { 'x64' { 'x86_64-pc-windows-msvc' } 'x86' { 'i686-pc-windows-msvc' } 'arm64' { 'aarch64-pc-windows-msvc' } }
@@ -213,8 +218,10 @@ if ($env:CRAFT_FONTS_DIR) {
   }
 }
 # portable.txt beside photocraft.exe switches on portable mode: settings, presets and recovery
-# files go to PhotoCraftData\ next to the exe instead of %APPDATA% (#228; see app_dirs.rs).
-Copy-Item (Join-Path $PSScriptRoot 'portable.txt') $Portable
+# files go to PhotoCraftData\ next to the exe instead of %APPDATA% (#228; see app_dirs.rs). The
+# source file differs by edition because the folders its instructions name do; the name inside
+# the archive is the one app_dirs.rs looks for, and stays portable.txt for both editions.
+Copy-Item (Join-Path $PSScriptRoot $PortableMarker) (Join-Path $Portable 'portable.txt')
 $Zip = Join-Path $Dist "$NameBase-$Version-windows-$Arch-portable.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue
 # The archive holds the files themselves. `-Path <folder>` puts the folder *in* the archive, so
