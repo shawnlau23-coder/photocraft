@@ -144,7 +144,11 @@ jobs:
               echo '       Pass the commit that run checked out, or build the packages you mean.' >&2
               exit 1
             fi
-            available="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run/artifacts" --paginate --jq '.[].name')"
+            # --paginate hands the whole page object to --jq, not each item, so the filter must name
+            # the wrapper key: '.[].name' fails this endpoint with "expected an object but got: array"
+            # (checked against the real API). This listing is what turns a mistyped run id or a
+            # platform that was never built into one readable message instead of three confused legs.
+            available="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run/artifacts" --paginate --jq '.artifacts[].name')"
             missing=0
             for runner_os in $runners; do
               name="sgl-build-unverified-$runner_os"
@@ -499,7 +503,7 @@ jobs:
             echo '       That build leg produced no bundle (it failed before packaging, or was skipped):' >&2
             echo '       nothing is verified for this platform, and nothing here should be read as a result.' >&2
             echo "       Artifacts that run does have:" >&2
-            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run/artifacts" --paginate --jq '.[].name' | sed 's/^/    /' >&2 || true
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run/artifacts" --paginate --jq '.artifacts[].name' | sed 's/^/    /' >&2 || true
             exit 1
           fi
           echo "  bundle from run $build_run:"
