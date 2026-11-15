@@ -9,6 +9,8 @@
 //!    folder can't be written (read-only medium, Program Files), the app warns and falls back.
 //! 3. The platform convention: macOS `~/Library/Application Support/Photocraft`, Windows
 //!    `%APPDATA%\Photocraft`, Linux `$XDG_CONFIG_HOME/photocraft` or `~/.config/photocraft`.
+//!    The "PhotoCraft with SGL Tools" build puts it in a folder of its own instead
+//!    ([`SGL_EDITION`]), so both products can be installed for the same user without sharing.
 //!
 //! One exception: the platform convention keeps crash-recovery autosaves out of what is synced
 //! with the settings: the Windows roaming profile and the Linux config folder ([`recovery_dir`]).
@@ -21,6 +23,42 @@ use std::sync::OnceLock;
 pub const PORTABLE_MARKERS: [&str; 2] = ["portable.txt", "PhotoCraft.portable"];
 /// The data folder created beside the executable in portable mode.
 pub const PORTABLE_DATA_DIR: &str = "PhotoCraftData";
+
+/// True in the "PhotoCraft with SGL Tools" build, whose packaging sets `PHOTOCRAFT_SGL_EDITION`
+/// while compiling (`packaging/windows/package.ps1 -Edition sgl`, and the job env of
+/// `.github/workflows/sgl-packages.yml` for all three platforms).
+///
+/// It is read at *compile* time on purpose. A runtime variable would be user-wide: it would move
+/// an upstream copy's settings too, and `PHOTOCRAFT_CONFIG_DIR`-style overrides outrank the
+/// portable marker, so it would break portable copies. With the flag set, the platform folder and
+/// the recovery folder get names of their own (`data_dir_name` below), and everything under them
+/// follows - preferences, presets, the window state file, the GPU marker, the log, autosaves, and
+/// the single-instance lock, `instance.json` and hand-off port that `single_instance` keeps there.
+/// An installed SGL copy and an installed upstream copy therefore neither overwrite each other's
+/// settings nor forward each other's documents to the wrong running process. Portable copies are
+/// unaffected either way: the marker still beats the platform folder.
+///
+/// Cargo does not rebuild when this variable changes, so a local build that flips it must rebuild
+/// the two files that read it: `touch apps/photocraft/src/app_dirs.rs
+/// crates/ui-egui/src/os_window.rs`. CI builds a fresh checkout, where it always applies.
+pub const SGL_EDITION: bool = match option_env!("PHOTOCRAFT_SGL_EDITION") {
+    Some(_) => true,
+    None => false,
+};
+
+/// The folder the platform convention puts this edition's data in: the vendor's `Photocraft` /
+/// XDG's lowercase `photocraft` upstream, and a name of its own for the SGL build. The SGL names
+/// hold only letters and digits (Windows) or letters, digits and one hyphen (the XDG lowercase
+/// convention), so they are legal folder names and cannot be mistaken for either product's.
+fn data_dir_name(sgl: bool) -> &'static str {
+    if cfg!(windows) || cfg!(target_os = "macos") {
+        if sgl { "PhotoCraftSGL" } else { "Photocraft" }
+    } else if sgl {
+        "photocraft-sgl"
+    } else {
+        "photocraft"
+    }
+}
 
 /// How [`DataDir::dir`] was chosen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +117,7 @@ pub fn recovery_dir() -> Option<PathBuf> {
 
 /// The recovery folder for `data`. Autosaves hold whole documents and are rewritten every few
 /// minutes, so with the platform convention they stay out of what is synced with the settings:
-/// - Windows (#5648): the machine-local `%LOCALAPPDATA%\Photocraft\Recovery`; the roaming
+/// - Windows (#5648): the machine-local `%LOCALAPPDATA%\<edition folder>\Recovery`; the roaming
 ///   `%APPDATA%` may be synced at sign-in and sign-out or capped by policy.
 /// - Linux and other XDG systems (#6612): `$XDG_STATE_HOME/photocraft/Recovery`, by default
 ///   `~/.local/state/photocraft/Recovery`, where the XDG Base Directory spec puts state that
@@ -95,7 +133,7 @@ pub fn resolve_recovery(data: &DataDir, env: impl Fn(&str) -> Option<OsString>) 
     if data.mode == Mode::Platform {
         if cfg!(windows) {
             if let Some(local) = env("LOCALAPPDATA").filter(|l| !l.is_empty()) {
-                return Some(PathBuf::from(local).join("Photocraft").join(RECOVERY));
+                return Some(PathBuf::from(local).join(data_dir_name(SGL_EDITION)).join(RECOVERY));
             }
         } else if !cfg!(target_os = "macos") {
             let state = env("XDG_STATE_HOME")
@@ -103,7 +141,7 @@ pub fn resolve_recovery(data: &DataDir, env: impl Fn(&str) -> Option<OsString>) 
                 .filter(|s| s.is_absolute())
                 .or_else(|| env("HOME").filter(|h| !h.is_empty()).map(|h| PathBuf::from(h).join(".local").join("state")));
             if let Some(state) = state {
-                return Some(state.join("photocraft").join(RECOVERY));
+                return Some(state.join(data_dir_name(SGL_EDITION)).join(RECOVERY));
             }
         }
     }
@@ -476,14 +514,15 @@ pub fn resolve(env: impl Fn(&str) -> Option<OsString>, exe_dir: Option<&Path>) -
 
 /// The platform convention, from `env` (so tests can fake `HOME`/`APPDATA`/`XDG_CONFIG_HOME`).
 pub fn platform_dir(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let name = data_dir_name(SGL_EDITION);
     let home = env("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
     if cfg!(target_os = "macos") {
-        return home.map(|h| h.join("Library/Application Support/Photocraft"));
+        return home.map(|h| h.join("Library/Application Support").join(name));
     }
     if cfg!(windows) {
-        return env("APPDATA").filter(|a| !a.is_empty()).map(|a| PathBuf::from(a).join("Photocraft"));
+        return env("APPDATA").filter(|a| !a.is_empty()).map(|a| PathBuf::from(a).join(name));
     }
-    env("XDG_CONFIG_HOME").filter(|x| !x.is_empty()).map(PathBuf::from).or_else(|| home.map(|h| h.join(".config"))).map(|c| c.join("photocraft"))
+    env("XDG_CONFIG_HOME").filter(|x| !x.is_empty()).map(PathBuf::from).or_else(|| home.map(|h| h.join(".config"))).map(|c| c.join(name))
 }
 
 /// The first portable marker file in `exe_dir`, if any.

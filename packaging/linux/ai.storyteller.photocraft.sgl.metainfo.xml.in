@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata for the "PhotoCraft with SGL Tools" edition (package.sh selects this
+     template, and installs it under this component id, when SGL_EDITION is set). Template:
+     package.sh substitutes @VERSION@ and @DATE@ from Cargo.toml and the build date.
+
+     Its <id> is its own, matching ai.storyteller.photocraft.sgl.desktop: one component id in a
+     software centre would make the two builds compete for the same entry, and installing one would
+     look like updating the other. The upstream project stays credited - this is PhotoCraft's code -
+     while the description says plainly which build this package is, so a person browsing a software
+     centre is not told they are getting the upstream app. -->
+<component type="desktop-application">
+  <id>ai.storyteller.photocraft.sgl</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>PhotoCraft with SGL Tools</name>
+  <summary>Edit photos and layered PSD documents</summary>
+  <developer id="ai.storyteller">
+    <name>Learning Machines LLC</name>
+  </developer>
+  <description>
+    <p>
+      PhotoCraft with SGL Tools is the PhotoCraft image editor bundled with SGL
+      Tools' own additions. It is a separate application: it keeps its own settings,
+      autosaves and preferences, and appears beside PhotoCraft in application menus
+      and in "Open With" without replacing it or changing any default application.
+    </p>
+    <p>
+      PhotoCraft itself is an open-source, native image editor with the familiar menus,
+      shortcuts, panels and tools professionals expect: layers, masks, adjustment
+      layers, layer styles, type and brushes.
+    </p>
+    <ul>
+      <li>Open, edit and save layered PSD and PSB files</li>
+      <li>8-bit, 16-bit and 32-bit float documents in RGB, grayscale, CMYK and Lab</li>
+      <li>A GPU compositor with multithreaded filters</li>
+      <li>Every action is a command, scriptable from a CLI, a JSON control channel and an MCP server</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">ai.storyteller.photocraft.sgl.desktop</launchable>
+  <icon type="stock">ai.storyteller.photocraft.sgl</icon>
+  <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI validates). The urls are the
+       upstream project's, because the code is the upstream project's; support for this build is not
+       claimed to come from them. -->
+  <url type="homepage">https://getartcraft.com/apps/photocraft</url>
+  <url type="bugtracker">https://github.com/storytold/photocraft/issues</url>
+  <url type="help">https://github.com/storytold/photocraft</url>
+  <categories>
+    <category>Graphics</category>
+    <category>RasterGraphics</category>
+    <category>Photography</category>
+  </categories>
+  <keywords>
+    <keyword>photo</keyword>
+    <keyword>image editor</keyword>
+    <keyword>psd</keyword>
+    <keyword>layers</keyword>
+  </keywords>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Editing The Great Wave off Kanagawa with type layers and adjustment layers</caption>
+      <image>https://raw.githubusercontent.com/storytold/photocraft/main/docs/images/photocraft-demo.jpg</image>
+    </screenshot>
+  </screenshots>
+  <branding>
+    <color type="primary" scheme_preference="light">#9fd0ff</color>
+    <color type="primary" scheme_preference="dark">#1f64ba</color>
+  </branding>
+  <requires>
+    <display_length compare="ge">760</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>tablet</control>
+  </supports>
+  <!-- No <provides> here, unlike upstream's metainfo: it lists the binary name (photocraft, shared
+       by both editions) and the media types, and a second component claiming them would have a
+       software centre treating the two builds as interchangeable. -->
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

@@ -1049,11 +1049,17 @@ mod tests {
     }
 
     /// X11 startup notification and docks match a window to its launcher by `StartupWMClass`,
-    /// so it has to be the class the window carries: the app id, on Wayland and X11 alike.
+    /// so it has to be the class the window carries: the app id, on Wayland and X11 alike. Each
+    /// packaged entry is checked against the id of its own edition, and against the id this build
+    /// compiles in, so the "PhotoCraft with SGL Tools" build can never launch with upstream's
+    /// launcher class (which would borrow its icon, its taskbar group and its window rules).
     #[test]
     fn the_desktop_entry_names_the_window_class() {
-        let entry = include_str!("../../../packaging/linux/ai.storyteller.photocraft.desktop");
-        let class = entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="));
-        assert_eq!(class, Some(super::APP_ID));
+        let class = |entry: &str| entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="));
+        let upstream = include_str!("../../../packaging/linux/ai.storyteller.photocraft.desktop");
+        let sgl = include_str!("../../../packaging/linux/ai.storyteller.photocraft.sgl.desktop");
+        assert_eq!(class(upstream), Some("ai.storyteller.photocraft"));
+        assert_eq!(class(sgl), Some("ai.storyteller.photocraft.sgl"));
+        assert_eq!(class(if super::app_dirs::SGL_EDITION { sgl } else { upstream }), Some(super::APP_ID));
     }
 }
