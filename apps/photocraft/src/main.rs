@@ -1055,7 +1055,11 @@ mod tests {
     /// launcher class (which would borrow its icon, its taskbar group and its window rules).
     #[test]
     fn the_desktop_entry_names_the_window_class() {
-        let class = |entry: &str| entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="));
+        // A plain fn, not a closure: the returned str borrows from the entry passed in, and a
+        // closure would have to be generic over that lifetime.
+        fn class(entry: &str) -> Option<&str> {
+            entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="))
+        }
         let upstream = include_str!("../../../packaging/linux/ai.storyteller.photocraft.desktop");
         let sgl = include_str!("../../../packaging/linux/ai.storyteller.photocraft.sgl.desktop");
         assert_eq!(class(upstream), Some("ai.storyteller.photocraft"));
